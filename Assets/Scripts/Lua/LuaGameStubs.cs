@@ -197,20 +197,15 @@ public static class LuaGameStubs
             //   action = "Select" (fid, sex)  → fire action animation on chosen sex
             // Both go through Apply(); PlayDuo defaults sex=1 so both prefabs
             // mount immediately, and Select fires the action on the chosen one.
-            if (evt == "emNOTIFY_UILOGINBG_ACTION" && args.Count >= 3)
+            // NOTE: emNOTIFY_UILOGINBG_ACTION is now handled directly by C#
+            // CreateRoleRuntimeBridge → UICreateRoleAvatarController.Apply().
+            // Lua fires this event with its own nCurFactionId which becomes stale
+            // when faction is changed via C# buttons. Ignoring the Lua event
+            // prevents stale-faction overrides (e.g. always resetting to faction 20).
+            if (evt == "emNOTIFY_UILOGINBG_ACTION")
             {
-                string action = args[1].Type == DataType.String ? args[1].String : "";
-                if (action == "PlayDuo")
-                {
-                    int fid = args[2].Type == DataType.Number ? (int)args[2].Number : 0;
-                    UICreateRoleAvatarController.Apply(fid, 1);
-                }
-                else if (action == "Select" && args.Count >= 4)
-                {
-                    int fid = args[2].Type == DataType.Number ? (int)args[2].Number : 0;
-                    int sex = args[3].Type == DataType.Number ? (int)args[3].Number : 1;
-                    UICreateRoleAvatarController.Apply(fid, sex, forceAction: true);
-                }
+                string action = args.Count > 1 && args[1].Type == DataType.String ? args[1].String : "";
+                Debug.Log($"[Lua:Event] emNOTIFY_UILOGINBG_ACTION action={action} (ignored, C# handles Apply)");
             }
             return DynValue.Nil;
         });

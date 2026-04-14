@@ -172,12 +172,20 @@ public static class UICreateRoleAvatarController
                 if (t != null && t.gameObject.activeSelf) t.gameObject.SetActive(false);
             }
             ApplyRadarSprite(createRoleRoot.transform, factionId);
+            // Sprite swap: set correct select/unselect sprite on each gender icon.
+            // Prefab has Image.sprite="None" — sprites must be loaded at runtime.
+            // Works WITH Toggle color tint: sprite encodes selected/unselected art,
+            // Toggle disabled tint (0.4 alpha) dims the selected icon on top.
             ApplyGenderIcons(createRoleRoot.transform, sex);
         }
 
         // Get or create avatar host under UILoginBG/Character
         var host = GetOrCreateHost();
         if (host == null) return;
+
+        // Ensure host is active (SelectRole hides all Character children)
+        if (!host.gameObject.activeSelf)
+            host.gameObject.SetActive(true);
 
         bool factionChanged = (factionId != s_lastFid);
         s_lastFid = factionId;
