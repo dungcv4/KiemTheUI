@@ -1,63 +1,405 @@
 using UnityEngine;
 
-public class Npc : MonoBehaviour
+namespace KTO.Game
 {
-	/*
-	Dummy class. This could have happened for several reasons:
+    // =======================================================================
+    //  Npc.cs — NPC entity MonoBehaviour (Phase 9.1 port)
+    //
+    //  Sources:
+    //    _shared/DecompiledSource/Npc.cs       — 123 fields, 152 method stubs
+    //    KTO_DecompiledReference/_root/Npc.c   — IL2CPP method bodies (277 KB)
+    //
+    //  Key methods ported:
+    //    InitData          — Npc.c:38-309   (ID storage, layer, scale, dir, mask)
+    //    CreateBoxCollider — Npc.c:432-484  (BoxCollider2D from NpcResTemplate)
+    //    ChangeLogicDir    — Npc.c:2147-2186 (dir16→dir8 LUT, dirty flag)
+    //    OnRecycle         — Npc.c:893-1048  (cleanup for pool return)
+    //
+    //  Fields ported: only the ~25 essential for entity lifecycle + click
+    //  detection. The full 123 fields (HP, effects, sounds, ride, hide,
+    //  feature parts, etc.) are deferred to later phases.
+    //
+    //  GUID preserved: 3044702afc7080759418579450c42f50 (AssetRipper stub)
+    //  executionOrder: -6 (from original, ensures Npc.Update runs before
+    //  camera + UI scripts)
+    // =======================================================================
 
-	1. No dll files were provided to AssetRipper.
+    [DefaultExecutionOrder(-6)]
+    public class Npc : MonoBehaviour
+    {
+        // -------------------------------------------------------------------
+        //  Core identity fields (offsets from DecompiledSource/Npc.cs)
+        // -------------------------------------------------------------------
 
-		Unity asset bundles and serialized files do not contain script information to decompile.
-			* For Mono games, that information is contained in .NET dll files.
-			* For Il2Cpp games, that information is contained in compiled C++ assemblies and the global metadata.
-			
-		AssetRipper usually expects games to conform to a normal file structure for Unity games of that platform.
-		A unexpected file structure could cause AssetRipper to not find the required files.
+        /// <summary>Server-assigned NPC instance ID. Unique per NPC on the map.</summary>
+        public int m_nNpcID;                      // 0x20
 
-	2. Incorrect dll files were provided to AssetRipper.
+        /// <summary>Visual resource ID → which sprite bundle to load.</summary>
+        public int m_nNpcResID;                    // 0x24
 
-		Any of the following could cause this:
-			* Il2CppInterop assemblies
-			* Deobfuscated assemblies
-			* Older assemblies (compared to when the bundle was built)
-			* Newer assemblies (compared to when the bundle was built)
+        /// <summary>Visual resource template (scale, collider, dialog radius).</summary>
+        public NpcResTemplate m_NpcResTemplate;    // 0x28
 
-		Note: Although assembly publicizing is bad, it alone cannot cause empty scripts. See: https://github.com/AssetRipper/AssetRipper/issues/653
+        // -------------------------------------------------------------------
+        //  Transform cache
+        // -------------------------------------------------------------------
+        public Transform m_Transform;              // 0xA0
+        public GameObject m_Object;                // 0xA8
 
-	3. Assembly Reconstruction has not been implemented.
+        /// <summary>Current world position (kept in sync with logic pos).</summary>
+        public Vector3 m_vePos;                    // 0xB0
 
-		Asset bundles contain a small amount of information about the script content.
-		This information can be used to recover the serializable fields of a script.
+        // -------------------------------------------------------------------
+        //  Identity flags
+        // -------------------------------------------------------------------
+        /// <summary>True if this NPC is the local player ("me").</summary>
+        public bool m_bIsMe;                       // 0xBC
 
-		See: https://github.com/AssetRipper/AssetRipper/issues/655
+        /// <summary>NPC archetype / kind (dialoger, player, monster, etc.).</summary>
+        public int m_nKind;                        // 0xE4
 
-	4. This script is unnecessary.
+        /// <summary>Blood bar style (server-supplied).</summary>
+        public int m_nBloodStyle;                  // 0xE8
 
-		If this script has no asset or script references, it can be deleted.
-		Be sure to resolve any compile errors before deleting because they can hide references.
+        /// <summary>Talk interaction type (server-supplied).</summary>
+        public int m_nTalkType;                    // 0xF4
 
-	5. Script Content Level 0
+        // -------------------------------------------------------------------
+        //  Scale
+        // -------------------------------------------------------------------
+        /// <summary>Current interpolating scale.</summary>
+        public float m_fCurSize = 1f;              // 0xC4
 
-		AssetRipper was set to not load any script information.
+        /// <summary>Target scale (from NpcResTemplate.m_fScale).</summary>
+        public float m_fDstSize = 1f;              // 0xC8
 
-	6. Cpp2IL failed to decompile Il2Cpp data
+        // -------------------------------------------------------------------
+        //  Action / animation state
+        // -------------------------------------------------------------------
+        /// <summary>Current visual action (FightStand, FightRun, etc.).</summary>
+        public NpcAction _CurAction = NpcAction.FightStand;   // 0x150
 
-		If this happened, there will be errors in the AssetRipper.log indicating that it happened.
-		This is an upstream problem, and the AssetRipper developer has very little control over it.
-		Please post a GitHub issue at: https://github.com/SamboyCoding/Cpp2IL/issues
+        /// <summary>Current 8-direction visual direction.</summary>
+        public Direction _CurRepresentDir = Direction.Bottom;  // 0x154
 
-	7. An incorrect path was provided to AssetRipper.
+        /// <summary>Raw 16-direction logic dir (0..255).</summary>
+        public int _LogicDir;                      // 0x160
 
-		This is characterized by "Mixed game structure has been found at" in the AssetRipper.log file.
-		AssetRipper expects games to conform to a normal file structure for Unity games of that platform.
-		An unexpected file structure could cause AssetRipper to not find the required files for script decompilation.
-		Generally, AssetRipper expects users to provide the root folder of the game. For example:
-			* Windows: the folder containing the game's .exe file
-			* Mac: the .app file/folder
-			* Linux: the folder containing the game's executable file
-			* Android: the apk file
-			* iOS: the ipa file
-			* Switch: the folder containing exefs and romfs
+        /// <summary>Flag: animation needs refresh on next frame.</summary>
+        public bool _NeedUpdateAnimation;          // 0x170
 
-	*/
+        // -------------------------------------------------------------------
+        //  Represent mask (bit flags controlling visual parts)
+        // -------------------------------------------------------------------
+        /// <summary>
+        /// Bitmask controlling which visual parts are active.
+        /// Source: Npc.c:InitData lines 200-280
+        /// </summary>
+        public int _RepresentMask;                 // 0x2F8
+
+        /// <summary>
+        /// True after the represent (sprite assembler) has been created.
+        /// </summary>
+        public bool bRepresent;                    // 0x308
+
+        // -------------------------------------------------------------------
+        //  Friendship (for click/tap dispatch)
+        // -------------------------------------------------------------------
+        /// <summary>True if this NPC is friendly to the local player.</summary>
+        public bool _IsFriend;                     // 0x21A
+
+        // -------------------------------------------------------------------
+        //  Rendering — sprite assembler
+        //
+        //  Phase 9.4: switched from PlayerAssembler (3-part body+head+shadow)
+        //  to NpcAssembler (single body sprite). NpcAssembler reads
+        //  Resources/NpcAssets/<resName>.json + Assets/Sprite/Npc/<resName>/*.png
+        //  produced by /tmp/extract_npc_bundle.py.
+        //
+        //  resName comes from server CMD_SPR_NEWNPC field 2 (or test data).
+        //  In the original it lives on NpcResTemplate.m_szResFile, which is
+        //  populated by RepresentSetting.GetNpcRes(resId). Until the
+        //  NpcRes.tab loader exists, we let callers set it directly.
+        // -------------------------------------------------------------------
+        NpcAssembler _assembler;
+
+        /// <summary>BoxCollider2D for click detection (Physics2D.Raycast).</summary>
+        BoxCollider2D _boxCollider;
+
+        // ===================================================================
+        //  InitData — Npc.c:38-309
+        //
+        //  Called by NpcManager.CreateNpc right after pool spawn.
+        //  Stores IDs, sets layer, initialises scale + direction + mask.
+        // ===================================================================
+        public void InitData(int nNpcId, int nNpcResID, int nKind,
+                             bool bIsMe, int nBloodStyle,
+                             bool bShowShadow, int nTalkType)
+        {
+            m_nNpcID      = nNpcId;
+            m_nNpcResID   = nNpcResID;
+            m_nKind       = nKind;
+            m_bIsMe       = bIsMe;
+            m_nBloodStyle = nBloodStyle;
+            m_nTalkType   = nTalkType;
+
+            // --- Look up NpcResTemplate ---
+            // Source: Npc.c:74 — m_NpcResTemplate = RepresentSetting.GetNpcRes(resId)
+            // Phase 9.1: RepresentSetting is not ported yet. We create a
+            // default template. When the tab-loader is wired, this will use
+            // RepresentSetting.GetNpcRes(nNpcResID) instead.
+            m_NpcResTemplate = new NpcResTemplate(nNpcResID);
+
+            // --- Layer assignment ---
+            // Source: Npc.c:85-98
+            //   if (bIsMe)       → layer = GameDefine.MeLayer
+            //   elif (nKind==1)  → layer = GameDefine.OtherPlayerLayer   (Player kind)
+            //   else             → layer = GameDefine.NpcLayer
+            int layer;
+            if (bIsMe)
+                layer = GameDefine.MeLayer;
+            else if (nKind == (int)NpcKind.Player)
+                layer = GameDefine.OtherPlayerLayer;
+            else
+                layer = GameDefine.NpcLayer;
+
+            if (layer >= 0)
+                gameObject.layer = layer;
+
+            // --- Initial direction ---
+            // Source: Npc.c:156 — _LogicDir = 0xAA (170 ≈ south-ish)
+            _LogicDir = 0xAA;
+            _CurRepresentDir = (Direction)GameDefine.Dir16ToDir8[(_LogicDir >> 4) & 0xF];
+
+            // --- Scale from template ---
+            // Source: Npc.c:162-164
+            m_fCurSize = m_NpcResTemplate.m_fScale;
+            m_fDstSize = m_NpcResTemplate.m_fScale;
+
+            // --- Represent mask ---
+            // Source: Npc.c:200-280 — sets bits per nKind
+            // Simplified: always enable BoxCollider + Shadow for now.
+            // Full mask logic (head text, blood bar per nKind) deferred.
+            _RepresentMask = (int)(NpcRepresentMask.BoxCollider | NpcRepresentMask.Shadow);
+
+            // If bShowShadow is false, clear shadow bit
+            if (!bShowShadow)
+                _RepresentMask &= ~(int)NpcRepresentMask.Shadow;
+
+            // Dialogers get head text
+            if (nKind == (int)NpcKind.Dialoger)
+                _RepresentMask |= (int)NpcRepresentMask.HeadText;
+
+            // Reset animation state
+            _CurAction = NpcAction.FightStand;
+            _NeedUpdateAnimation = true;
+            bRepresent = false;
+            _IsFriend = true; // Default friendly; server will update
+
+            // Cache transform
+            m_Transform = transform;
+            m_Object    = gameObject;
+        }
+
+        // ===================================================================
+        //  CreateBoxCollider — Npc.c:432-484
+        //
+        //  Adds a BoxCollider2D for Physics2D click detection.
+        //  Size and offset come from NpcResTemplate.
+        // ===================================================================
+        public void CreateBoxCollider()
+        {
+            // Source: Npc.c:436 — checks _RepresentMask bit 0x100
+            bool showCollider = (_RepresentMask & (int)NpcRepresentMask.BoxCollider) != 0;
+
+            if (showCollider)
+            {
+                // Source: Npc.c:445 — AddMissingComponent<BoxCollider2D>
+                _boxCollider = gameObject.GetComponent<BoxCollider2D>();
+                if (_boxCollider == null)
+                    _boxCollider = gameObject.AddComponent<BoxCollider2D>();
+
+                _boxCollider.enabled = true;
+
+                if (m_NpcResTemplate != null)
+                {
+                    // Source: Npc.c:455-460
+                    // size from template offset 0x6C, offset from 0x74
+                    _boxCollider.size = new Vector2(
+                        m_NpcResTemplate.m_fBoxColliderSizeX,
+                        m_NpcResTemplate.m_fBoxColliderSizeY);
+                    _boxCollider.offset = new Vector2(
+                        m_NpcResTemplate.m_fBoxColliderPosX,
+                        m_NpcResTemplate.m_fBoxColliderPosY);
+                }
+                else
+                {
+                    // Fallback defaults matching NpcResTemplate constructor
+                    _boxCollider.size   = new Vector2(0.6f, 0.6f);
+                    _boxCollider.offset = new Vector2(0f, 0.4f);
+                }
+            }
+            else
+            {
+                // Source: Npc.c:470-480 — disable existing collider
+                _boxCollider = gameObject.GetComponent<BoxCollider2D>();
+                if (_boxCollider != null)
+                    _boxCollider.enabled = false;
+            }
+        }
+
+        // ===================================================================
+        //  ChangeLogicDir — Npc.c:2147-2186
+        //
+        //  Updates the raw 16-dir logic direction and derives the 8-dir
+        //  visual direction via the Dir16ToDir8 LUT.
+        // ===================================================================
+        public void ChangeLogicDir(int dir16)
+        {
+            // Source: Npc.c:2155 — store raw at _LogicDir
+            _LogicDir = dir16;
+
+            // Source: Npc.c:2162-2168 — dir8 = Dir16ToDir8[dir16 >> 4]
+            int idx = (dir16 >> 4) & 0xF;
+            Direction newDir = (Direction)GameDefine.Dir16ToDir8[idx];
+
+            if (_CurRepresentDir != newDir)
+            {
+                _CurRepresentDir    = newDir;
+                _NeedUpdateAnimation = true;
+            }
+
+            // Source: Npc.c:2180 — if bIsMe, SetArrowDir(dir16)
+            // Arrow direction indicator deferred to Phase 10.
+        }
+
+        // ===================================================================
+        //  SetWorldPosition — helper wrapping the original's
+        //  XPositionFrameBuffer.SetPosition logic
+        //
+        //  Source: Npc.c:ActiveAttribute:2320-2328
+        //    SetPosition(logicX / 800.0, logicY / 1600.0, logicZ / 800.0)
+        //  Phase 9.1: we skip the Z/height component (2D game plane).
+        // ===================================================================
+        public void SetWorldPosition(int logicX, int logicY)
+        {
+            float wx = logicX * Env.LOGIC_POS_CELL;
+            float wy = logicY * Env.LOGIC_POS_CELL;
+            m_vePos = new Vector3(wx, wy, 0f);
+            if (m_Transform != null)
+                m_Transform.position = m_vePos;
+        }
+
+        // ===================================================================
+        //  CreateRepresent — instantiate the sprite assembler
+        //
+        //  Source: Npc.c:Active (2250-2268), called after InitData.
+        //  Phase 9.1: uses PlayerAssembler with default sprites.
+        //  When NpcResTemplate.m_szResFile is properly wired, this will
+        //  load the correct NPC sprite bundle.
+        // ===================================================================
+        public void CreateRepresent()
+        {
+            if (bRepresent) return;
+
+            // Pull bundle name from the template (set by NpcManager.CreateNpc
+            // overload or NpcNetworkHandler before this call).
+            string resName = m_NpcResTemplate != null ? m_NpcResTemplate.m_szResFile : null;
+            if (string.IsNullOrEmpty(resName))
+            {
+                Debug.LogWarning($"[Npc {m_nNpcID}] CreateRepresent skipped: no resName on template");
+                return;
+            }
+
+            _assembler = NpcAssembler.Attach(gameObject, resName, m_fCurSize);
+            transform.localScale = new Vector3(m_fCurSize, m_fCurSize, 1f);
+
+            _assembler.SetAction(_CurAction);
+            _assembler.SetLogicDir(_LogicDir);
+
+            bRepresent = true;
+            _NeedUpdateAnimation = false;
+        }
+
+        // ===================================================================
+        //  DoAction — set the current animation action
+        //
+        //  Source: Npc.c:DoAction (1641-1731)
+        //  Simplified: delegates to PlayerAssembler.SetAction
+        // ===================================================================
+        public void DoAction(NpcAction action)
+        {
+            if (_CurAction == action) return;
+            _CurAction = action;
+            _NeedUpdateAnimation = true;
+
+            if (_assembler != null)
+                _assembler.SetAction(action);
+        }
+
+        // ===================================================================
+        //  OnRecycle — Npc.c:893-1048
+        //
+        //  Cleanup when the NPC is returned to the pool.
+        //  Clears all references, disables collider, resets state.
+        // ===================================================================
+        public void OnRecycle()
+        {
+            // Source: Npc.c:920-940 — clear represent
+            bRepresent = false;
+            _RepresentMask = 0;
+
+            // Disable collider
+            if (_boxCollider != null)
+            {
+                _boxCollider.enabled = false;
+                _boxCollider = null;
+            }
+
+            // Reset assembler
+            if (_assembler != null)
+            {
+                _assembler.SetAction(NpcAction.FightStand);
+                _assembler = null;
+            }
+
+            // Source: Npc.c:1000-1048 — zero out fields
+            m_nNpcID         = 0;
+            m_nNpcResID      = 0;
+            m_NpcResTemplate = null;
+            m_nKind          = (int)NpcKind.None;
+            m_bIsMe          = false;
+            m_nBloodStyle    = 0;
+            m_nTalkType      = 0;
+            m_fCurSize       = 1f;
+            m_fDstSize       = 1f;
+            _CurAction       = NpcAction.FightStand;
+            _CurRepresentDir = Direction.Bottom;
+            _LogicDir        = 0;
+            _IsFriend        = true;
+            _NeedUpdateAnimation = false;
+            m_vePos          = Vector3.zero;
+            m_Transform      = null;
+            m_Object         = null;
+        }
+
+        // ===================================================================
+        //  Update — Npc.c:2541-2563
+        //
+        //  Phase 9.1: only handles animation dirty flag.
+        //  Full version calls UpdateFeature, UpdateRepresentPos,
+        //  UpdateChangeSize, ProcSceneOcclusion, NpcFlyText.Update.
+        // ===================================================================
+        void Update()
+        {
+            if (!bRepresent) return;
+
+            if (_NeedUpdateAnimation && _assembler != null)
+            {
+                _assembler.SetAction(_CurAction);
+                _assembler.SetLogicDir(_LogicDir);
+                _NeedUpdateAnimation = false;
+            }
+        }
+    }
 }

@@ -58,7 +58,12 @@ public class LuaEngine : MonoBehaviour
 
     private Script _lua;
     private Transform _canvas;
-    
+
+    // Static access for bridges that need to call into Lua callbacks
+    // without carrying a Script reference through every constructor.
+    public static LuaEngine Instance { get; private set; }
+    public Script Script { get { return _lua; } }
+
     // Window registry: name → { table, bridge, gameObject }
     private Dictionary<string, LuaWindowInfo> _windows = new Dictionary<string, LuaWindowInfo>();
 
@@ -72,10 +77,16 @@ public class LuaEngine : MonoBehaviour
 
     void Awake()
     {
+        Instance = this;
         // Find the Canvas — use parent if LuaEngine is child of Canvas, else search
         var canvas = GetComponentInParent<Canvas>();
         _canvas = canvas != null ? canvas.transform : transform;
         InitializeLua();
+    }
+
+    void OnDestroy()
+    {
+        if (Instance == this) Instance = null;
     }
 
     void InitializeLua()
@@ -87,11 +98,17 @@ public class LuaEngine : MonoBehaviour
         UserData.RegisterType<LuaRectTransformProxy>();
         UserData.RegisterType<LuaRect>();
         UserData.RegisterType<LuaTextProxy>();
+        UserData.RegisterType<LuaAnimatorProxy>();
         
         _lua = new Script(CoreModules.Preset_Complete);
+        Debug.Log("[LuaEngine] XLua backend ready (MoonSharp-compat shim)");
 
         // Register game stubs
         LuaGameStubs.RegisterAll(_lua);
+
+        // Phase A "fake gate": expose this Lua script to LuaEventBridge so
+        // CMD_SPR_FIRE_EVENT packets from server can be replayed into Lua.
+        KTO.Network.LuaEventBridge.Bind(_lua);
         
         // Setup Ui framework
         SetupUiFramework();

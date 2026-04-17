@@ -341,9 +341,10 @@ public static class LuaGameStubs
         var campType = new Table(script);
         campType["camp_type_neutrality"] = 0; campType["camp_type_justice"] = 1; campType["camp_type_evil"] = 2;
         npc["CampTypeDef"] = campType;
-        // Sex definitions (used by UICreateRole)
+        // Sex definitions (used by UICreateRole + UILoginBG)
         var sexDef = new Table(script);
-        sexDef["MALE"] = 1;
+        sexDef["NONE"]   = 0;
+        sexDef["MALE"]   = 1;
         sexDef["FEMALE"] = 2;
         npc["SexDef"] = sexDef;
         // 5-elements series enum (used by UICreateRole)
@@ -453,6 +454,61 @@ public static class LuaGameStubs
             if (id < 1 || id > 20) return DynValue.NewString("?");
             return DynValue.NewString(factionNames[id - 1]);
         });
+
+        // === Faction.tbFactionInfo =============================================
+        // Extracted from game_data/extracted_tabs/dat_549_nId_15c_21r.tab (the real
+        // faction.tab). Shape matches what Faction.lua builds at Init(): for each
+        // faction id 1..20, a sub-table with szMaleAvatar, szFemaleAvatar, and
+        // the already-split tbMaleAvatarCenter/tbFemaleAvatarCenter number arrays.
+        // UILoginBG.lua:35 iterates this with pairs() to build the login scene's
+        // avatar prefab mount points, so this MUST be populated before the .lua
+        // files are loaded — otherwise the scrolling-background init crashes.
+        var factionInfoRows = new (int id, string mA, string fA, double mX, double mY, double fX, double fY, bool mOk, bool fOk)[] {
+            (1,  "M_SL",  "",     50,    -265,      0,       0,     true,  false),
+            (2,  "M_TW",  "F_TW", 63,    -322.5,    100,    -325.5, true,  true),
+            (3,  "M_TM",  "F_TM", 40,    -276,      30,     -268,   true,  true),
+            (4,  "M_5D",  "F_5D", 0,     -276,      59,     -276,   true,  true),
+            (5,  "",      "F_EM", 0,      0,        77,     -305,   false, true),
+            (6,  "M_CY",  "F_CY", 17,    -268,      30,     -268,   true,  true),
+            (7,  "M_GB",  "F_GB", 48,    -276,      90,     -274,   true,  true),
+            (8,  "M_TR",  "F_TR", -26,   -389,      74,     -283,   true,  true),
+            (9,  "M_WD",  "F_WD", 21,    -311.5,    53,     -283,   true,  true),
+            (10, "M_KL",  "F_KL", 31,    -265,      28,     -274,   true,  true),
+            (11, "M_MJ",  "F_MJ", 11,    -268,      51,     -258,   true,  true),
+            (12, "M_DL",  "F_DL", 57,    -276,      92,     -296,   true,  true),
+            (13, "M_GM",  "F_GM", 30,    -270,      36,     -274,   true,  true),
+            (14, "M_BD",  "F_BD", 30,    -300,      45,     -296,   true,  true),
+            (15, "M_XY",  "F_XY", 15,    -300,      28,     -296,   true,  true),
+            (16, "M_BTS", "F_BTS",40,    -319,      40,     -285,   true,  true),
+            (17, "M_THD", "F_THD",15,    -300,      28,     -296,   true,  true),
+            (18, "M_CGM", "F_CGM",15,    -300,      28,     -296,   true,  true),
+            (19, "M_YP",  "F_YP", 15,    -300,      28,     -296,   true,  true),
+            (20, "M_WHT", "F_WHT",45,    -240,      45,     -240,   true,  true),
+        };
+        var tbFactionInfo = new Table(script);
+        foreach (var row in factionInfoRows) {
+            var info = new Table(script);
+            info["nId"] = row.id;
+            info["szMaleAvatar"]   = row.mOk ? row.mA : "";
+            info["szFemaleAvatar"] = row.fOk ? row.fA : "";
+            info["nOpenType"]      = (row.mOk && row.fOk) ? 3 : (row.mOk ? 1 : 2);
+            info["nSeries"]        = factionSeries[row.id - 1];
+            if (row.mOk) {
+                var mCenter = new Table(script);
+                mCenter[1] = row.mX;
+                mCenter[2] = row.mY;
+                info["tbMaleAvatarCenter"] = DynValue.NewTable(mCenter);
+            }
+            if (row.fOk) {
+                var fCenter = new Table(script);
+                fCenter[1] = row.fX;
+                fCenter[2] = row.fY;
+                info["tbFemaleAvatarCenter"] = DynValue.NewTable(fCenter);
+            }
+            tbFactionInfo.Set(row.id, DynValue.NewTable(info));
+        }
+        faction["tbFactionInfo"] = DynValue.NewTable(tbFactionInfo);
+
         script.Globals["Faction"] = faction;
 
         // === Login (UICreateRole) ===
@@ -644,8 +700,6 @@ public static class LuaGameStubs
                 v["y"] = a.Count > 1 ? a[1].Number : 0;
                 return DynValue.NewTable(v);
             });
-            var vec3Table = new Table(script);
-            vec3Table["zero"] = DynValue.NewTable(new Table(script) { ["x"] = 0, ["y"] = 0, ["z"] = 0 });
             uiGlobal.Table["Vector3"] = DynValue.NewCallback((c,a) => {
                 var v = new Table(script);
                 v["x"] = a.Count > 0 ? a[0].Number : 0;
@@ -653,8 +707,9 @@ public static class LuaGameStubs
                 v["z"] = a.Count > 2 ? a[2].Number : 0;
                 return DynValue.NewTable(v);
             });
-            // Also make it indexable as table for .zero
-            uiGlobal.Table["Vector3"] = vec3Table;
+            // Note: if any Lua file ever needs Ui.Vector3.zero, install a
+            // metatable via DoString with __call + __index — currently no
+            // loaded file references it, so the plain callback is sufficient.
 
             // Ui.UIEventListener
             var uiEventListener = new Table(script);
@@ -1124,18 +1179,45 @@ public static class LuaGameStubs
         }
 
         // === Task ===
+        // UIHudLeftPanelTask drives itself from Task.tbTaskData / tbDailyTask*
+        // plus a long tail of Task:GetXxx() helpers. We don't have the
+        // real task system ported yet — every helper returns a safe default
+        // so the panel builds an empty list instead of throwing.
         var taskTbl = new Table(script);
         taskTbl["TASK_TYPE_MAIN"] = 1;
         taskTbl["TASK_TYPE_DAILY"] = 2;
         taskTbl["TASK_TYPE_SUB"] = 3;
         taskTbl["TASK_TYPE_ACT"] = 4;
-        taskTbl["tbTaskData"] = new Table(script);
+
+        // tbTaskData.tbCurTaskList is iterated with pairs() on line 86.
+        // Create the nested table so `tbPlayerTask.tbCurTaskList = tbPlayerTask.tbCurTaskList or {}`
+        // sees an actual empty table (not nil-coerced to a brand-new one).
+        var taskData = new Table(script);
+        taskData["tbCurTaskList"] = new Table(script);
+        taskTbl["tbTaskData"] = taskData;
         taskTbl["tbDailyTaskOrder"] = new Table(script);
         taskTbl["tbDailyTaskSettings"] = new Table(script);
+
         taskTbl["GetTaskInfo"] = DynValue.NewCallback((c, a) => DynValue.Nil);
         taskTbl["IsTaskFinished"] = DynValue.NewCallback((c, a) => DynValue.False);
         taskTbl["GetTaskList"] = DynValue.NewCallback((c, a) => DynValue.NewTable(script));
         taskTbl["GetTitleIncludeColor"] = DynValue.NewCallback((c, a) => a.Count > 1 ? a[1] : DynValue.NewString(""));
+
+        // UIHudLeftPanelTask uses these lookups. All return either nil, 0,
+        // or an empty-ish value — enough for the panel to render "no tasks".
+        taskTbl["GetTaskCfg"]              = DynValue.NewCallback((c,a) => DynValue.Nil);
+        taskTbl["IsEmptyTask"]             = DynValue.NewCallback((c,a) => DynValue.True);
+        taskTbl["GetTitleWithPrefix"]      = DynValue.NewCallback((c,a) => DynValue.NewString(""));
+        taskTbl["GetStepText"]             = DynValue.NewCallback((c,a) => DynValue.NewString(""));
+        taskTbl["GetTarget"]               = DynValue.NewCallback((c,a) => DynValue.NewString(""));
+        taskTbl["GetTaskType"]             = DynValue.NewCallback((c,a) => DynValue.NewNumber(0));
+        taskTbl["GetCurStepAndTotalStep"]  = DynValue.NewCallback((c,a) => DynValue.NewTuple(DynValue.NewNumber(0), DynValue.NewNumber(0)));
+        taskTbl["CheckCondition"]          = DynValue.NewCallback((c,a) => DynValue.False);
+        taskTbl["DoAction_Client"]         = DynValue.NewCallback((c,a) => DynValue.Nil);
+        taskTbl["GetCondGuideMsg"]         = DynValue.NewCallback((c,a) => DynValue.NewString(""));
+        // Note the typo "Recommed" — preserved from the original game code.
+        taskTbl["GetRecommedTaskId"]       = DynValue.NewCallback((c,a) => DynValue.NewNumber(0));
+
         script.Globals["Task"] = taskTbl;
 
         // === TeamMgr (expand) ===

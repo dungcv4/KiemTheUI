@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace KTO.Network
 {
@@ -89,6 +90,9 @@ namespace KTO.Network
             net.RegisterHandler(LoginProtocol.CMD_LOGIN_ON,  OnRecvLoginOn);
             net.RegisterHandler(LoginProtocol.CMD_ROLE_LIST, OnRecvRoleList);
             net.RegisterHandler(LoginProtocol.CMD_CREATE_ROLE, OnRecvCreateRole);
+            net.RegisterHandler(LoginProtocol.CMD_INIT_GAME,  OnRecvInitGameAck);
+            net.RegisterHandler(LoginProtocol.CMD_PLAY_GAME,  OnRecvPlayGameAck);
+            net.RegisterHandler(LoginProtocol.CMD_SPR_FIRE_EVENT, OnRecvFireEvent);
 
             net.OnTcpConnected    += OnTcpConnected;
             net.OnTcpDisconnected += OnTcpDisconnected;
@@ -103,6 +107,9 @@ namespace KTO.Network
                 net.UnregisterHandler(LoginProtocol.CMD_LOGIN_ON);
                 net.UnregisterHandler(LoginProtocol.CMD_ROLE_LIST);
                 net.UnregisterHandler(LoginProtocol.CMD_CREATE_ROLE);
+                net.UnregisterHandler(LoginProtocol.CMD_INIT_GAME);
+                net.UnregisterHandler(LoginProtocol.CMD_PLAY_GAME);
+                net.UnregisterHandler(LoginProtocol.CMD_SPR_FIRE_EVENT);
                 net.OnTcpConnected    -= OnTcpConnected;
                 net.OnTcpDisconnected -= OnTcpDisconnected;
             }
@@ -195,9 +202,44 @@ namespace KTO.Network
         /// </summary>
         public void SelectRole(int roleID)
         {
+            _pendingRoleID = roleID;
             var net = NetworkManager.Instance;
             net.SendCmd(LoginProtocol.CMD_INIT_GAME,
                 PlatformUserID, roleID, SystemInfo.deviceUniqueIdentifier, SystemInfo.deviceModel);
+        }
+
+        // Phase A: roleID we're handing off init→play with
+        private int _pendingRoleID;
+
+        // ── CMD_INIT_GAME ack (cmd 104) ──
+        private void OnRecvInitGameAck(string payload)
+        {
+            Debug.Log($"[Login] CMD_INIT_GAME ack: {payload}");
+            // For fake gate we ignore the body and immediately send CMD_PLAY_GAME
+            // with the roleID we remembered in SelectRole().
+            NetworkManager.Instance.SendCmd(LoginProtocol.CMD_PLAY_GAME, _pendingRoleID);
+        }
+
+        // ── CMD_PLAY_GAME ack (cmd 106) ──
+        private void OnRecvPlayGameAck(string payload)
+        {
+            Debug.Log($"[Login] CMD_PLAY_GAME ack: {payload} — loading MainUIScene");
+            // Server has now placed us in the world; switch to HUD scene.
+            // The follow-up CMD_SPR_FIRE_EVENT(7) will arrive after scene load and be
+            // forwarded to LuaEventBridge.
+            SceneManager.LoadScene("MainUIScene");
+        }
+
+        // ── CMD_SPR_FIRE_EVENT (cmd 32200) ──
+        private void OnRecvFireEvent(string payload)
+        {
+            if (!int.TryParse(payload, out int eventId))
+            {
+                Debug.LogWarning($"[Login] CMD_SPR_FIRE_EVENT bad payload: {payload}");
+                return;
+            }
+            Debug.Log($"[Login] CMD_SPR_FIRE_EVENT → EventNotify:OnNotify({eventId})");
+            LuaEventBridge.Fire(eventId);
         }
 
         /// <summary>

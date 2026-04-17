@@ -240,6 +240,16 @@ public static class UICreateRoleAvatarController
         var rt = instance.GetComponent<RectTransform>();
         if (rt != null)
             rt.localRotation = Quaternion.identity;
+
+        // Issue 3 fix — F2_WHT_stand_0007.asset has rect.y=11.149 while other frames
+        // have rect.y=0. Unity's standard Image quad uses rect.y as padding → that
+        // single frame renders ~11px higher than its siblings → up/down flicker each
+        // time the Animator swaps to it. useSpriteMesh=true makes Image build the
+        // mesh from the sprite's actual vertex data instead, which aligns identically
+        // across frames. Apply to every Image inside the avatar so the same
+        // bad-frame-metadata bug can't bite future sprites either.
+        foreach (var img in instance.GetComponentsInChildren<Image>(true))
+            img.useSpriteMesh = true;
     }
 
     static Transform GetOrCreateHost()
@@ -252,16 +262,21 @@ public static class UICreateRoleAvatarController
         var charTransform = lbg.transform.Find("Character");
         if (charTransform == null) return null;
 
-        // Clean up orphan _AvatarHost from old approach
+        // Clean up orphan _AvatarHost wherever it lives (except the valid one
+        // under UILoginBG/Character). GameObject.Find("UICreateRole") only
+        // returns ACTIVE objects, so the previous scoped cleanup silently
+        // skipped during SelectRole flow when UICreateRole panel was inactive,
+        // letting the orphan inside CharacterPortrait persist into CreateRole
+        // and double-spawn avatars. Walk every inactive Transform to be safe.
+        foreach (var t in Object.FindObjectsOfType<Transform>(true))
+        {
+            if (t == null || t.name != kHostName) continue;
+            if (t.parent == charTransform) continue; // valid host
+            Object.DestroyImmediate(t.gameObject);
+        }
         var createRole = GameObject.Find("UICreateRole");
         if (createRole != null)
         {
-            var oldHosts = createRole.GetComponentsInChildren<RectTransform>(true);
-            for (int i = 0; i < oldHosts.Length; i++)
-            {
-                if (oldHosts[i] != null && oldHosts[i].name == kHostName)
-                    Object.DestroyImmediate(oldHosts[i].gameObject);
-            }
             var oldRing = createRole.transform.Find("imgBG/CharacterPortrait/SelectionRing");
             if (oldRing != null) Object.DestroyImmediate(oldRing.gameObject);
         }
@@ -421,7 +436,11 @@ public static class UICreateRoleAvatarController
 
         // Character Canvas: keep original, enable overrideSorting + ensure enabled.
         // Original bundle has: Canvas(m_RenderMode=2, m_Enabled=1, overrideSorting=0, sortingOrder=1, sortingLayerID=194136777)
-        // We set overrideSorting=true so Image avatars sort at order=1 between VFX layers.
+        // We set overrideSorting=true so Image avatars sort at order=5 above UILoginBG/bg.
+        // Order MUST be >1 (UILoginBG root canvas is also at 1): when Character is also at
+        // order=1, the createrole_bg sprite drawn by UILoginBG covers the avatar batch
+        // because hierarchy tiebreak puts UILoginBG/bg AFTER Character. order=5 is safely
+        // above bg(1) and below VFX_front(if used) and UICreateRole(10).
         var charTransform = lbg.transform.Find("Character");
         if (charTransform != null)
         {
@@ -431,7 +450,7 @@ public static class UICreateRoleAvatarController
                 charCanvas.enabled = true;
                 charCanvas.overrideSorting = true;
                 charCanvas.sortingLayerName = "UI";
-                charCanvas.sortingOrder = 1;
+                charCanvas.sortingOrder = 5;
             }
         }
 

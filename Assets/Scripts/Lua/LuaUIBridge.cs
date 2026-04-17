@@ -202,44 +202,57 @@ public class LuaUIBridge
 
     // ============================================================
     // pPanel:GetObject(path) → returns a proxy
+    //
+    // NOTE: Return type is the concrete proxy class (not DynValue).
+    // In MoonSharp native, DynValue was the stack currency and the
+    // wrapped UserData was transparently unwrapped when Lua called a
+    // method. In XLua, return values are pushed via reflection:
+    // `ObjectTranslator.PushAny(L, ret)` first checks `custom_push_funcs`
+    // *only for ValueType operands*, then for reference types falls
+    // through to `Push(L, o)` which wraps the CLR object as generic
+    // userdata. If we return `DynValue`, Lua sees a DynValue wrapper
+    // with no GetComponent/Find/etc. method — every `:GetComponent(...)`
+    // call after a GetObject() blew up as "attempt to call nil".
+    // Returning the proxy directly lets XLua push it with the proper
+    // typeid and Lua dispatches methods normally.
     // ============================================================
-    public DynValue GetObject(string path)
+    public LuaGameObjectProxy GetObject(string path)
     {
         var t = FindCached(path);
-        if (t == null) return DynValue.Nil;
-        return UserData.Create(new LuaGameObjectProxy(t.gameObject));
+        if (t == null) return null;
+        return new LuaGameObjectProxy(t.gameObject);
     }
 
     // ============================================================
     // pPanel:GetTransform(path) → returns transform proxy
     // ============================================================
-    public DynValue GetTransform(string path)
+    public LuaTransformProxy GetTransform(string path)
     {
         var t = FindCached(path);
-        if (t == null) return DynValue.Nil;
-        return UserData.Create(new LuaTransformProxy(t));
+        if (t == null) return null;
+        return new LuaTransformProxy(t);
     }
 
     // ============================================================
     // pPanel:GetRectTransform(path) → returns proxy with rect/sizeDelta
     // ============================================================
-    public DynValue GetRectTransform(string path)
+    public LuaRectTransformProxy GetRectTransform(string path)
     {
         var t = FindCached(path);
-        if (t == null) return DynValue.Nil;
+        if (t == null) return null;
         var rt = t.GetComponent<RectTransform>();
-        if (rt == null) return DynValue.Nil;
-        return UserData.Create(new LuaRectTransformProxy(rt));
+        if (rt == null) return null;
+        return new LuaRectTransformProxy(rt);
     }
 
     // ============================================================
     // pPanel:GetEmojiText(path) → returns a proxy with .text, .onClickLink, .raycastTarget
     // ============================================================
-    public DynValue GetEmojiText(string path)
+    public LuaTextProxy GetEmojiText(string path)
     {
         var t = FindCached(path);
-        if (t == null) return DynValue.Nil;
-        return UserData.Create(new LuaTextProxy(t));
+        if (t == null) return null;
+        return new LuaTextProxy(t);
     }
 
     // ============================================================
@@ -367,7 +380,119 @@ public class LuaUIBridge
     }
 
     // ============================================================
-    // Transform access  
+    // pPanel:ResetCamera() — UILoginBG:OnCreate. Original resets the
+    // UI-camera for panels that render 3D characters into a RawImage.
+    // No 3D character pipeline yet → safe no-op.
+    // ============================================================
+    public void ResetCamera() { }
+
+    // ============================================================
+    // pPanel:DeleteObject(path) — destroy a nested GameObject.
+    // Used by UILoginBG.OnPreDestroy() for dynamically loaded avatars.
+    // ============================================================
+    public void DeleteObject(string path)
+    {
+        var t = FindCached(path);
+        if (t == null) return;
+        _cache.Remove(path);
+        Object.Destroy(t.gameObject);
+    }
+
+    // ============================================================
+    // pPanel:Object_SetPosition(path, vec3)  — world position
+    // pPanel:Object_GetPosition(path) → {x,y,z}
+    // pPanel:Object_SetLocalPosition(path, vec3)
+    // vec3 is a Lua table with x/y/z fields (produced by Ui.Vector3).
+    // ============================================================
+    public void Object_SetPosition(string path, DynValue vec)
+    {
+        var t = FindCached(path);
+        if (t == null) return;
+        t.position = ReadVec3(vec);
+    }
+
+    // Return XLua.LuaTable directly so XLua pushes a real Lua table
+    // (LuaBase.push goes straight to lua_getref) instead of wrapping
+    // a DynValue as opaque userdata. Lua side then accesses pos.x / .y / .z
+    // as normal table fields without going through any compat shim.
+    public XLua.LuaTable Object_GetPosition(string path)
+    {
+        var t = FindCached(path);
+        return WriteVec3Table(t != null ? t.position : Vector3.zero);
+    }
+
+    public void Object_SetLocalPosition(string path, DynValue vec)
+    {
+        var t = FindCached(path);
+        if (t == null) return;
+        t.localPosition = ReadVec3(vec);
+    }
+
+    private static Vector3 ReadVec3(DynValue vec)
+    {
+        if (vec == null || vec.Type != DataType.Table) return Vector3.zero;
+        var tbl = vec.Table;
+        float x = ReadFloat(tbl.Get("x"));
+        float y = ReadFloat(tbl.Get("y"));
+        float z = ReadFloat(tbl.Get("z"));
+        return new Vector3(x, y, z);
+    }
+
+    private static float ReadFloat(DynValue dv)
+    {
+        if (dv == null) return 0f;
+        return dv.Type == DataType.Number ? (float)dv.Number : 0f;
+    }
+
+    // Build {x=,y=,z=} directly as an XLua.LuaTable so the caller can
+    // return it straight to Lua without a DynValue wrapper in the middle.
+    private XLua.LuaTable WriteVec3Table(Vector3 v)
+    {
+        var script = LuaEngine.Instance != null ? LuaEngine.Instance.Script : null;
+        if (script == null) return null;
+        var t = new Table(script);
+        t["x"] = v.x;
+        t["y"] = v.y;
+        t["z"] = v.z;
+        return t._xluaTable;
+    }
+
+    // ============================================================
+    // pPanel:FindAnimator(path) → Animator component proxy (nil if none).
+    // ============================================================
+    public LuaAnimatorProxy FindAnimator(string path)
+    {
+        var t = FindCached(path);
+        if (t == null) return null;
+        var anim = t.GetComponent<Animator>();
+        if (anim == null) anim = t.GetComponentInChildren<Animator>();
+        if (anim == null) return null;
+        return new LuaAnimatorProxy(anim);
+    }
+
+    // ============================================================
+    // pPanel:DynamicLoadGameObjectAsync(mount, resPath, key, callback)
+    // Used by UILoginBG to stream avatar prefabs at runtime. We don't
+    // have the avatar bundles wired yet — fire the callback immediately
+    // with the key so the Lua state machine advances past the load step.
+    // ============================================================
+    public void DynamicLoadGameObjectAsync(string mount, string resPath, string key, DynValue callback)
+    {
+        if (callback == null || callback.Type != DataType.Function) return;
+        try
+        {
+            var luaEng = LuaEngine.Instance;
+            if (luaEng != null && luaEng.Script != null)
+                luaEng.Script.Call(callback, DynValue.NewString(key ?? ""));
+        }
+        catch (ScriptRuntimeException ex)
+        {
+            Debug.LogWarning($"[LuaUIBridge] DynamicLoadGameObjectAsync callback error: {ex.DecoratedMessage}");
+        }
+    }
+
+    // ============================================================
+    // Transform access
     // ============================================================
     public LuaTransformProxy transform { get { return new LuaTransformProxy(_root); } }
     [MoonSharpHidden]
@@ -523,10 +648,14 @@ public class LuaGameObjectProxy
 
     public void SetActive(bool active) { if (_go) _go.SetActive(active); }
 
-    public DynValue GetComponent(DynValue typeArg)
+    // Returns self so `obj:GetComponent(Ui.XXXX):SomeMethod(...)` chains
+    // work even though we don't have real component proxies for most
+    // of the KTO UI types (MiniMap, SkillCountDown, MapPathLine, ...).
+    // Every method Lua might call on the result is stubbed below so the
+    // call graph completes without throwing.
+    public LuaGameObjectProxy GetComponent(DynValue typeArg)
     {
-        // Return self for chaining — Lua expects methods on the result
-        return UserData.Create(this);
+        return this;
     }
 
     // === Transform proxy ===
@@ -562,7 +691,10 @@ public class LuaGameObjectProxy
     public void OnLuaCreate(DynValue self) { }
     public void OpenManualSkillCaster(DynValue obj, DynValue castType, DynValue targetId) { }
     public void CloseManualSkillCaster(DynValue idx) { }
-    public DynValue GetCastingPos() { return DynValue.NewTuple(DynValue.NewNumber(0), DynValue.NewNumber(0)); }
+    // XLua maps `out` parameters to additional Lua return values, so
+    // `local x, y = obj:GetCastingPos()` works. Returning a DynValue.NewTuple
+    // did not — XLua wraps the DynValue as opaque userdata, not as two values.
+    public void GetCastingPos(out double x, out double y) { x = 0; y = 0; }
     public double GetCastingDir() { return 0; }
 
     // === SetLayoutVertical (ContentSizeFitter) ===
@@ -579,12 +711,12 @@ public class LuaTransformProxy
 
     public LuaTransformProxy(Transform t) { _t = t; }
 
-    public DynValue Find(string path)
+    public LuaTransformProxy Find(string path)
     {
-        if (_t == null) return DynValue.Nil;
+        if (_t == null) return null;
         var child = _t.Find(path);
-        if (child == null) return DynValue.Nil;
-        return UserData.Create(new LuaTransformProxy(child));
+        if (child == null) return null;
+        return new LuaTransformProxy(child);
     }
 
     public Vector3 localEulerAngles
@@ -645,5 +777,66 @@ public class LuaTransformProxy
     {
         get { var rt = _t?.GetComponent<RectTransform>(); return rt ? rt.offsetMax : Vector2.zero; }
         set { var rt = _t?.GetComponent<RectTransform>(); if (rt) rt.offsetMax = value; }
+    }
+}
+
+/// <summary>
+/// Proxy cho Animator — Lua calls Play/SetTrigger/SetBool after pPanel:FindAnimator(path).
+/// Most KTO UI animators are intro/idle loops the original game drives via Play("StateName").
+/// If no Animator exists (we haven't wired the rigged avatars yet), every call is a no-op
+/// so Lua state machines don't crash.
+/// </summary>
+[MoonSharpUserData]
+public class LuaAnimatorProxy
+{
+    private Animator _anim;
+    public LuaAnimatorProxy(Animator a) { _anim = a; }
+
+    public void Play(string stateName)
+    {
+        if (_anim != null && !string.IsNullOrEmpty(stateName))
+            _anim.Play(stateName, 0, 0f);
+    }
+
+    public void Play(string stateName, int layer)
+    {
+        if (_anim != null && !string.IsNullOrEmpty(stateName))
+            _anim.Play(stateName, layer, 0f);
+    }
+
+    public void SetTrigger(string name)
+    {
+        if (_anim != null && !string.IsNullOrEmpty(name))
+            _anim.SetTrigger(name);
+    }
+
+    public void SetBool(string name, bool val)
+    {
+        if (_anim != null && !string.IsNullOrEmpty(name))
+            _anim.SetBool(name, val);
+    }
+
+    public void SetFloat(string name, double val)
+    {
+        if (_anim != null && !string.IsNullOrEmpty(name))
+            _anim.SetFloat(name, (float)val);
+    }
+
+    public void SetInteger(string name, int val)
+    {
+        if (_anim != null && !string.IsNullOrEmpty(name))
+            _anim.SetInteger(name, val);
+    }
+
+    public bool enabled
+    {
+        get { return _anim != null && _anim.enabled; }
+        set { if (_anim != null) _anim.enabled = value; }
+    }
+
+    public double speed
+    {
+        get { return _anim != null ? _anim.speed : 0; }
+        set { if (_anim != null) _anim.speed = (float)value; }
     }
 }

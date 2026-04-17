@@ -11,6 +11,25 @@ namespace KTO.Network
         public const ushort CMD_INIT_GAME  = 104;
         public const ushort CMD_PLAY_GAME  = 106;
 
+        // Phase A "fake gate": server → client Lua EventNotify dispatch
+        public const ushort CMD_SPR_FIRE_EVENT = 32200;
+
+        // Phase 9.3: NPC spawn/remove — server → client
+        // Source: GameServer TCPGameServerCmds enum (TCPCmdHandler.cs)
+        // CMD_SPR_NEWNPC sends NPC data as colon-separated text:
+        //   npcID:resID:resName:name:title:posX:posY:dir:kind:visibleOnMinimap
+        // CMD_SPR_DELNPC sends: npcID:mapCode
+        public const ushort CMD_SPR_NEWNPC  = 408;
+        public const ushort CMD_SPR_DELNPC  = 409;
+
+        // Phase 9.3: NPC click — client → server
+        // Source: TCPGameServerCmds.CMD_KT_CLICKON_NPC = 50004
+        public const ushort CMD_KT_CLICKON_NPC  = 50004;
+        // Source: TCPGameServerCmds.CMD_KT_G2C_NPCDIALOG = 50005 (server → client)
+        public const ushort CMD_KT_G2C_NPCDIALOG = 50005;
+        // Source: TCPGameServerCmds.CMD_KT_C2G_NPCDIALOG = 50006 (client → server)
+        public const ushort CMD_KT_C2G_NPCDIALOG = 50006;
+
         // ── Crypto keys ──
         public const string WEB_KEY   = "9377(*)#mst9";   // Login2 MD5 sign key
         public const string KEY_SHA1  = "abcde";           // Token SHA1 key

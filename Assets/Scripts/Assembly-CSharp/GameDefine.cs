@@ -1,63 +1,153 @@
 using UnityEngine;
 
-public class GameDefine : MonoBehaviour
+namespace KTO.Game
 {
-	/*
-	Dummy class. This could have happened for several reasons:
+    // Source: _shared/DecompiledSource/GameDefine.cs (Cpp2IL stub, 68 fields, 9 enums)
+    //         KTO_DecompiledReference/_root/GameDefine.c (IL2CPP .cctor body)
+    //
+    // The original GameDefine is a massive static class with sorting layers,
+    // layer masks, action enums, direction enums, weapon→action maps, etc.
+    // We port only the subset needed for Phase 9.1 (NPC entities).
+    //
+    // NpcAction and Direction enums are already defined in PlayerAssembler.cs
+    // (KTO.Game namespace). We re-export Direction here for convenience but
+    // do NOT duplicate NpcAction.
 
-	1. No dll files were provided to AssetRipper.
+    /// <summary>
+    /// 8-direction visual enum. Matches the sprite row layout in NpcAsset.
+    /// Source: _shared/DecompiledSource/GameDefine.cs — enum Direction
+    /// </summary>
+    public enum Direction
+    {
+        Bottom      = 0,
+        LeftBottom  = 1,
+        Left        = 2,
+        LeftTop     = 3,
+        Top         = 4,
+        RightTop    = 5,
+        Right       = 6,
+        RightBottom = 7,
+        Count       = 8,
+    }
 
-		Unity asset bundles and serialized files do not contain script information to decompile.
-			* For Mono games, that information is contained in .NET dll files.
-			* For Il2Cpp games, that information is contained in compiled C++ assemblies and the global metadata.
-			
-		AssetRipper usually expects games to conform to a normal file structure for Unity games of that platform.
-		A unexpected file structure could cause AssetRipper to not find the required files.
+    /// <summary>
+    /// NPC kind / archetype. Determines layer, click behaviour, and
+    /// represent mask bits.
+    /// Source: _shared/DecompiledSource/GameDefine.cs — enum NpcKind
+    ///         KTO_DecompiledReference/_root/NpcManager.c:CreateNpc (layer switch)
+    /// </summary>
+    public enum NpcKind
+    {
+        None             = -1,
+        Normal           = 0,
+        Player           = 1,
+        Dialoger         = 2,
+        Partner          = 3,
+        Silencer         = 4,
+        SilencerNoneName = 5,
+        God              = 6,
+        Mechanism        = 7,
+        Sporter          = 8,
+        Building         = 9,
+    }
 
-	2. Incorrect dll files were provided to AssetRipper.
+    /// <summary>
+    /// Server→client action codes. Maps to NpcAction for animation.
+    /// Source: _shared/DecompiledSource/GameDefine.cs — enum KE_NPC_ACTION
+    /// </summary>
+    public enum KE_NPC_ACTION
+    {
+        act_none        = 0,
+        act_stand       = 1,
+        act_run         = 2,
+        act_death       = 3,
+        act_bat         = 4,
+        act_sit         = 5,
+        act_attack1     = 6,
+        act_attack2     = 7,
+        act_magic       = 8,
+        act_jump        = 9,
+        act_randomattack = 10,
+        act_fastattack  = 11,
+        act_count       = 12,
+    }
 
-		Any of the following could cause this:
-			* Il2CppInterop assemblies
-			* Deobfuscated assemblies
-			* Older assemblies (compared to when the bundle was built)
-			* Newer assemblies (compared to when the bundle was built)
+    /// <summary>
+    /// Bit flags controlling what visual parts an NPC displays.
+    /// Source: KTO_DecompiledReference/_root/Npc.c:InitData (represent mask setup)
+    /// </summary>
+    [System.Flags]
+    public enum NpcRepresentMask
+    {
+        None           = 0,
+        BoxCollider    = 0x0100,   // bit 8 — CreateBoxCollider checks this
+        Shadow         = 0x0200,   // bit 9
+        HeadText       = 0x0400,   // bit 10
+        BloodBar       = 0x0800,   // bit 11
+        Feature        = 0x1000,   // bit 12
+    }
 
-		Note: Although assembly publicizing is bad, it alone cannot cause empty scripts. See: https://github.com/AssetRipper/AssetRipper/issues/653
+    /// <summary>
+    /// Static constants + layer IDs ported from GameDefine.
+    /// Source: _shared/DecompiledSource/GameDefine.cs (field offsets 0x00-0x18)
+    ///         KTO_DecompiledReference/_root/GameDefine.c (.cctor body)
+    /// </summary>
+    public static class GameDefine
+    {
+        // --- Layer IDs (resolved at runtime via LayerMask.NameToLayer) ---
+        // Source: GameDefine.cctor — `MeLayer = LayerMask.NameToLayer("Me")`
+        //         etc. for OtherPlayerLayer, NpcLayer
+        // Phase 9.1: we define the layer NAMES here; the TagManager.asset
+        // is updated separately to create the actual layers.
+        public const string MeLayerName          = "Me";
+        public const string OtherPlayerLayerName = "OtherPlayer";
+        public const string NpcLayerName         = "Npc";
 
-	3. Assembly Reconstruction has not been implemented.
+        // Cached layer indices (initialised by Init or on first use)
+        public static int MeLayer          { get; private set; }
+        public static int OtherPlayerLayer { get; private set; }
+        public static int NpcLayer         { get; private set; }
 
-		Asset bundles contain a small amount of information about the script content.
-		This information can be used to recover the serializable fields of a script.
+        // --- Tick rate (duplicated from Env for code that references GameDefine) ---
+        // Source: GameDefine.cctor — `GAME_FPS = 0x12` (18)
+        public const int GAME_FPS = 18;
 
-		See: https://github.com/AssetRipper/AssetRipper/issues/655
+        // --- Logic↔world conversion ---
+        // Source: GameDefine struct offset 0x1C — LOGIC_POS_CELL = 1/800
+        public const float LOGIC_POS_CELL = 0.00125f;
 
-	4. This script is unnecessary.
+        // --- Dir16→Dir8 lookup table ---
+        // Source: NpcDef.LogicDirToRepDir at global-metadata.dat 0x5a0528
+        //         KTO_DecompiledReference/_root/Npc.c:ChangeLogicDir — `dir8 = array[dir16 >> 4]`
+        // 16 logic directions → 8 visual directions
+        public static readonly int[] Dir16ToDir8 =
+            { 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7 };
 
-		If this script has no asset or script references, it can be deleted.
-		Be sure to resolve any compile errors before deleting because they can hide references.
+        // --- Player represent speed param ---
+        // Source: GameDefine.cctor — PlayerRepresentSpeedParam dict
+        // Maps Direction → speed multiplier for animation timing
+        public static readonly float[] PlayerRepresentSpeedParam =
+            { 2.0f, 1.5f, 1.0f, 1.5f, 2.0f, 1.5f, 1.0f, 1.5f };
 
-	5. Script Content Level 0
+        /// <summary>
+        /// Call once at game startup (e.g. from GameStart or SceneLoadManager).
+        /// Resolves layer names → layer indices.
+        /// </summary>
+        public static void Init()
+        {
+            MeLayer          = LayerMask.NameToLayer(MeLayerName);
+            OtherPlayerLayer = LayerMask.NameToLayer(OtherPlayerLayerName);
+            NpcLayer         = LayerMask.NameToLayer(NpcLayerName);
 
-		AssetRipper was set to not load any script information.
-
-	6. Cpp2IL failed to decompile Il2Cpp data
-
-		If this happened, there will be errors in the AssetRipper.log indicating that it happened.
-		This is an upstream problem, and the AssetRipper developer has very little control over it.
-		Please post a GitHub issue at: https://github.com/SamboyCoding/Cpp2IL/issues
-
-	7. An incorrect path was provided to AssetRipper.
-
-		This is characterized by "Mixed game structure has been found at" in the AssetRipper.log file.
-		AssetRipper expects games to conform to a normal file structure for Unity games of that platform.
-		An unexpected file structure could cause AssetRipper to not find the required files for script decompilation.
-		Generally, AssetRipper expects users to provide the root folder of the game. For example:
-			* Windows: the folder containing the game's .exe file
-			* Mac: the .app file/folder
-			* Linux: the folder containing the game's executable file
-			* Android: the apk file
-			* iOS: the ipa file
-			* Switch: the folder containing exefs and romfs
-
-	*/
+            // If layers aren't configured in TagManager, Unity returns -1.
+            // Log a warning but don't crash — the game still works, just
+            // click detection won't filter by layer.
+            if (MeLayer < 0)
+                Debug.LogWarning($"[GameDefine] Layer '{MeLayerName}' not found in TagManager. Add it to ProjectSettings.");
+            if (OtherPlayerLayer < 0)
+                Debug.LogWarning($"[GameDefine] Layer '{OtherPlayerLayerName}' not found in TagManager. Add it to ProjectSettings.");
+            if (NpcLayer < 0)
+                Debug.LogWarning($"[GameDefine] Layer '{NpcLayerName}' not found in TagManager. Add it to ProjectSettings.");
+        }
+    }
 }

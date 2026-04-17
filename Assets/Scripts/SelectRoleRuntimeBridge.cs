@@ -116,6 +116,23 @@ public class SelectRoleRuntimeBridge : MonoBehaviour
             {
                 _characterContainer = t;
                 Debug.Log("[SelectRole] Found character container: UILoginBG/Character");
+
+                // Ensure Character canvas is enabled with override sorting so the
+                // avatar Image actually renders. Without overrideSorting, the
+                // sub-canvas merges into UILoginBG's render group and the avatar
+                // Image silently fails to draw (Unity sub-canvas merge ordering
+                // quirk). order MUST be > UILoginBG canvas order (1): when both
+                // are at 1, hierarchy tiebreak puts UILoginBG/bg AFTER Character
+                // and the createrole_bg sprite covers the avatar batch. Same fix
+                // as UICreateRoleAvatarController.EnsureCanvasSetup uses.
+                var charCanvas = t.GetComponent<Canvas>();
+                if (charCanvas != null)
+                {
+                    charCanvas.enabled = true;
+                    charCanvas.overrideSorting = true;
+                    charCanvas.sortingLayerName = "UI";
+                    charCanvas.sortingOrder = 5;
+                }
                 break;
             }
         }
@@ -341,6 +358,41 @@ public class SelectRoleRuntimeBridge : MonoBehaviour
         _currentAvatar = Instantiate(prefab, _characterContainer);
         _currentAvatar.name = avatarName;
         _currentAvatar.SetActive(true);
+
+        // Issue 3 fix — F2_WHT_stand_0007.asset has rect.y=11.149 while other frames
+        // have rect.y=0. Unity's standard Image quad uses rect.y as padding → that
+        // single frame renders ~11px higher than its siblings → up/down flicker each
+        // time the Animator swaps to it. useSpriteMesh=true makes Image build the
+        // mesh from the sprite's actual vertex data instead, which aligns identically
+        // across frames. Apply to every Image inside the avatar so the same
+        // bad-frame-metadata bug can't bite future sprites either.
+        foreach (var img in _currentAvatar.GetComponentsInChildren<Image>(true))
+            img.useSpriteMesh = true;
+
+        // Issue 4 fix (F_EM oversize) — RUNTIME ONLY, prefab untouched to match
+        // RippedProject_APK source. The original prefab has sizeDelta=(604,604)
+        // but the animation frames have sprite rect ~(352,446). In Tuanjie Unity
+        // the sprite renders at native rect; in standard Unity the sprite mesh
+        // stretches to fill sizeDelta → 1.72x horizontal stretch → character
+        // looks distorted. Force animator to first frame so .asset sprite is
+        // active, then override sizeDelta to the sprite's actual rect.
+        var animator = _currentAvatar.GetComponent<Animator>();
+        if (animator != null && animator.runtimeAnimatorController != null)
+            animator.Update(0f);
+        var rootImg = _currentAvatar.GetComponent<Image>();
+        var rootRT  = _currentAvatar.GetComponent<RectTransform>();
+        if (rootImg != null && rootImg.sprite != null && rootRT != null)
+        {
+            // Only shrink — never grow — the rect, so avatars whose prefab
+            // sizeDelta already matches their sprite (M_SL etc.) are left alone.
+            Vector2 spriteSize = rootImg.sprite.rect.size;
+            if (spriteSize.x > 0 && spriteSize.y > 0
+                && (spriteSize.x < rootRT.sizeDelta.x * 0.85f
+                 || spriteSize.y < rootRT.sizeDelta.y * 0.85f))
+            {
+                rootRT.sizeDelta = spriteSize;
+            }
+        }
 
         // Apply CharacterMidPos (mirrors Lua UILoginBG:Play → Object_SetLocalPosition)
         var rt = _currentAvatar.GetComponent<RectTransform>();

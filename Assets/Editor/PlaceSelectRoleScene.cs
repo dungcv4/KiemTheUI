@@ -7,19 +7,33 @@ using UnityEditor.SceneManagement;
 // Authoritative one-off placer for the SelectRole screen.
 // Follows SKILL Step 4b — single-screen placer pattern.
 //
-// Stack:
-//   Layer 0: static background  → Assets/Sprite/scene_bg/createrole_bg.png
-//                                 (UILoginBG bundle res_p_134 is empty —
-//                                 only particle anchors / 3D scene roots)
-//   Layer 1: UISelectRoleExist  → Assets/Prefabs/Imported/UISelectRoleExist.prefab
-//                                 (the main panel; active by default)
+// Stack (sortingOrder ↑ = on top):
+//   Layer 0: Background_Canvas        → createrole_bg sprite
+//   Layer 1: UILoginBG (Canvas)        → empty parent for Character mount
+//                                        Character sub-canvas overrideSorting=true,
+//                                        order=2 → avatar renders above bg
+//   Layer 3: UISelectRoleExist_Canvas  → role list panel UI on top
+//
+// UILoginBG structure mirrors the REAL prefab from
+// RippedProject_APK/ExportedProject/Assets/game/ui/views/UILoginBG.prefab
+// (the KiemTheUI/Assets/game/ui/views/UILoginBG.prefab file is wrong — it's
+// actually a particle effect named GX35; do NOT trust it).
+//
+// Real UILoginBG layout (sub-objects):
+//   UILoginBG (RT scale=0,0,0 in prefab — runtime sets to 1,1,1)
+//     ├ bg              (background image — we use Background_Canvas instead)
+//     ├ VFX_after       (particle SortingGroup — skipped here)
+//     ├ Character       (RectTransform, Canvas WorldSpace, sortingOrder=1)
+//     └ VFX_front       (particle SortingGroup — skipped here)
+//
+// We only create UILoginBG + Character (the mount point used by
+// SelectRoleRuntimeBridge.FindCharacterContainer) since SelectRole doesn't
+// need the bg/VFX layers (Background_Canvas already shows createrole_bg,
+// and per Lua UILoginBG:OnCreate the VFX layers start inactive anyway).
 //
 // NOT included: UICreateRole popup (res_p_55) — that's a separate screen
 // opened from the "Tạo nhân vật" button. Per SKILL §0, popups belong to
 // their own placer.
-//
-// NOT included: LuaRuntime — this placer is for evaluating raw pipeline
-// fidelity (visual correctness without dynamic lua-driven content).
 public static class PlaceSelectRoleScene
 {
     [MenuItem("KTO/Place SelectRole Scene")]
@@ -62,14 +76,22 @@ public static class PlaceSelectRoleScene
             Debug.Log("[PlaceSelectRole] Placed background createrole_bg.png");
         }
 
-        // Step 3 — Layer 1: UISelectRoleExist (main panel)
-        PlacePrefab("Assets/Prefabs/Imported/UISelectRoleExist.prefab",
-                    "UISelectRoleExist_Canvas", sortingOrder: 1, active: true);
+        // Step 3 — UILoginBG with Character mount point (mirrors real prefab
+        // from RippedProject_APK). Provides the container that
+        // SelectRoleRuntimeBridge.FindCharacterContainer searches for as
+        // "Character" with parent "UILoginBG".
+        CreateUILoginBGWithCharacter();
 
-        // Step 4 — kill any white spriteless rectangles inline
+        // Step 4 — Layer 3: UISelectRoleExist (main panel) — bumped from
+        // sortingOrder=1 to 3 so the role list renders above UILoginBG (1)
+        // and Character sub-canvas (2)
+        PlacePrefab("Assets/Prefabs/Imported/UISelectRoleExist.prefab",
+                    "UISelectRoleExist_Canvas", sortingOrder: 3, active: true);
+
+        // Step 5 — kill any white spriteless rectangles inline
         HideSpritelessInline();
 
-        // Step 5 — LuaRuntime: hosts LuaEngine which loads every Lua file in
+        // Step 6 — LuaRuntime: hosts LuaEngine which loads every Lua file in
         // Resources/Lua and binds Button.onClick handlers from tbOnClick
         // closures. Awake() runs in Play mode and populates dynamic content
         // (character scroll list, server name, faction icon swaps, etc.).
@@ -77,10 +99,49 @@ public static class PlaceSelectRoleScene
         luaGo.AddComponent<LuaEngine>();
         Debug.Log("[PlaceSelectRole] Added LuaRuntime → LuaEngine");
 
-        // Step 6 — save scene
+        // Step 7 — save scene
         EditorSceneManager.MarkSceneDirty(scene);
         EditorSceneManager.SaveScene(scene, "Assets/SelectRoleScene.unity");
         Debug.Log("[PlaceSelectRole] Saved Assets/SelectRoleScene.unity");
+    }
+
+    // Creates UILoginBG canvas root with a Character sub-canvas mount point.
+    // Structure mirrors RippedProject_APK/.../UILoginBG.prefab (the authoritative
+    // source). Character canvas uses overrideSorting=true with sortingOrder=2 so
+    // the avatar renders above Background_Canvas (0) but below UISelectRoleExist
+    // panel (3).
+    private static void CreateUILoginBGWithCharacter()
+    {
+        // 1. UILoginBG canvas root — mirror real prefab Canvas config:
+        //    renderMode=ScreenSpaceCamera in original, but we use SSO to match
+        //    Background_Canvas/UISelectRoleExist_Canvas siblings. sortingOrder=1.
+        var loginBg = MakeCanvas("UILoginBG", sortingOrder: 1);
+        var loginBgRt = loginBg.GetComponent<RectTransform>();
+        loginBgRt.localScale = Vector3.one; // override default 0,0,0
+
+        // 2. Character mount — RT centered (matches real prefab):
+        //    anchor=(0.5,0.5), pos=(0,0), size=(100,100), pivot=(0.5,0.5)
+        //    Then add a sub-Canvas with overrideSorting=true so the avatar
+        //    renders at our chosen order regardless of where it sits in the
+        //    hierarchy.
+        var characterGo = new GameObject("Character",
+            typeof(RectTransform), typeof(Canvas), typeof(GraphicRaycaster));
+        characterGo.transform.SetParent(loginBg.transform, false);
+
+        var charRt = characterGo.GetComponent<RectTransform>();
+        charRt.anchorMin = new Vector2(0.5f, 0.5f);
+        charRt.anchorMax = new Vector2(0.5f, 0.5f);
+        charRt.pivot = new Vector2(0.5f, 0.5f);
+        charRt.anchoredPosition = Vector2.zero;
+        charRt.sizeDelta = new Vector2(100f, 100f);
+        charRt.localScale = Vector3.one;
+
+        var charCanvas = characterGo.GetComponent<Canvas>();
+        charCanvas.overrideSorting = true;
+        charCanvas.sortingLayerName = "UI";
+        charCanvas.sortingOrder = 2; // between Background_Canvas (0) and UISelectRoleExist_Canvas (3)
+
+        Debug.Log("[PlaceSelectRole] Created UILoginBG/Character mount (sortingOrder 1/2)");
     }
 
     private static GameObject MakeCanvas(string name, int sortingOrder)
@@ -92,9 +153,13 @@ public static class PlaceSelectRoleScene
         canvas.sortingOrder = sortingOrder;
         var scaler = canvasGo.GetComponent<CanvasScaler>();
         scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-        scaler.referenceResolution = new Vector2(1334f, 750f);
+        // Issue 2 fix — original UISelectRoleExist.prefab CanvasScaler is 1280×720,
+        // MatchWidthOrHeight, match=0 (verified at prefab line 1824-1829). Wrapping
+        // it in a 1334×750/match=0.5 canvas rescaled the avatars (which use absolute
+        // pixel sizeDelta like M_TR=798×798) → wrong character sizes vs panel.
+        scaler.referenceResolution = new Vector2(1280f, 720f);
         scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
-        scaler.matchWidthOrHeight = 0.5f;
+        scaler.matchWidthOrHeight = 0f;
         return canvasGo;
     }
 
