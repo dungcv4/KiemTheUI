@@ -1,19 +1,20 @@
 // =======================================================================
 //  ItemTemplate.cs — Static item metadata (name, icon, type, stats).
 //
-//  Source: Setting/Item/*.tab in pack0.dat (Amulet.tab, Armor.tab,
-//          Boots.tab, etc. — total ~50+ tab files with ~50K rows).
-//  Client Lua: 04_Bag/Lua/Item.lua (client-side Item:GetClass registry).
+//  Source: GameServer XML configs at
+//    GameServer_NET8/GameServer/bin/Debug/net10.0/Config/Config/KT_Item/**/*.xml
+//  consolidated into a single JSON at
+//    Assets/Resources/item_templates.json  (via /tmp/build_item_templates_json.py)
 //
-//  In the original game, ItemTemplate fields are loaded from Setting tabs
-//  at client boot (BagMgr calls Item:LoadAllTemplates). Our port ships a
-//  ItemTemplate struct that matches the tab column order 1:1, plus a
-//  static registry keyed by nTemplateId.
+//  ~13k items across 42 XML files (weapons, armor, gems, medicine,
+//  quest items, task items, etc.). Client loads all at boot so any
+//  dwId coming from server CMD_BAG_SYNC can be resolved to name/icon.
 //
-//  For "chờ ghép server" mode, the server tells us nTemplateId — the
-//  client looks up the rest (name, icon, stats) from this registry.
+//  The JSON uses short keys (id/n/t/eq/stk/…) to keep the file < 3 MB.
+//  See build_item_templates_json.py for the key mapping.
 // =======================================================================
 using System.Collections.Generic;
+using UnityEngine;
 
 namespace KTO.Game.Item
 {
@@ -142,16 +143,156 @@ namespace KTO.Game.Item
         public static Dictionary<int, ItemTemplate>.ValueCollection All => _byId.Values;
 
         /// <summary>
-        /// Load all templates from pack0 Setting/Item/*.tab files if available,
-        /// fall back to mock entries for UI smoke testing.
+        /// Load all templates from Resources/item_templates.json (bundled
+        /// from server XML configs — see build_item_templates_json.py).
+        /// Falls back to the mock set if the file is missing / corrupt,
+        /// so UI smoke tests still work without the data file.
         /// </summary>
         public static void LoadAll()
         {
             if (_byId.Count > 0) return;
 
-            // TODO: actual tab loader via pack0 reader. For now, register
-            // a small mock set so UIBagPanel has something to display.
+            try
+            {
+                var ta = Resources.Load<TextAsset>("item_templates");
+                if (ta != null && !string.IsNullOrEmpty(ta.text))
+                {
+                    int n = LoadFromJson(ta.text);
+                    Debug.Log($"[ItemDatabase] Loaded {n} item templates from JSON");
+                    if (n > 0) return;
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogError($"[ItemDatabase] JSON load failed: {ex.Message}");
+            }
+            // Fallback
             LoadMockData();
+            Debug.Log($"[ItemDatabase] Fallback mock: {_byId.Count} items");
+        }
+
+        /// <summary>
+        /// Hand-rolled parser for the compact item_templates.json shape.
+        /// Format: { "version":1, "count":N, "items":[{"id":123, "n":"...", ...}, ...] }
+        /// Short keys match build_item_templates_json.py.
+        /// Hand-rolled because Unity JsonUtility chokes on top-level arrays
+        /// of anonymous-shape objects + we avoid a Newtonsoft dep.
+        /// </summary>
+        static int LoadFromJson(string json)
+        {
+            int count = 0;
+            int i = json.IndexOf("\"items\"");
+            if (i < 0) return 0;
+            i = json.IndexOf('[', i);
+            if (i < 0) return 0;
+            i++; // past [
+
+            while (i < json.Length)
+            {
+                // Skip whitespace and commas
+                while (i < json.Length && (json[i] == ' ' || json[i] == ',' || json[i] == '\n' || json[i] == '\r' || json[i] == '\t')) i++;
+                if (i >= json.Length || json[i] == ']') break;
+                if (json[i] != '{') { i++; continue; }
+
+                // Find matching '}' (no nested objects in our format)
+                int end = json.IndexOf('}', i);
+                if (end < 0) break;
+                string obj = json.Substring(i, end - i + 1);
+                i = end + 1;
+
+                var tpl = ParseOne(obj);
+                if (tpl != null)
+                {
+                    _byId[tpl.nTemplateId] = tpl;
+                    count++;
+                }
+            }
+            return count;
+        }
+
+        static ItemTemplate ParseOne(string obj)
+        {
+            int id     = ReadInt(obj, "\"id\":");
+            if (id <= 0) return null;
+            return new ItemTemplate
+            {
+                nTemplateId  = id,
+                szName       = ReadStr(obj, "\"n\":"),
+                nType        = ReadInt(obj, "\"t\":"),
+                nEquipPos    = ReadInt(obj, "\"eq\":"),
+                nMaxStack    = ReadInt(obj, "\"stk\":", 1),
+                nColor       = ReadInt(obj, "\"q\":"),
+                nMinLevel    = ReadInt(obj, "\"lv\":"),
+                nLevel       = ReadInt(obj, "\"lv\":"),
+                szIcon       = ReadStr(obj, "\"ic\":"),
+                nSellPrice   = ReadInt(obj, "\"pr\":"),
+                nBindType    = ReadInt(obj, "\"bnd\":"),
+                szDesc       = ReadStr(obj, "\"ds\":"),
+                nAttack      = ReadInt(obj, "\"atk\":"),
+                nDefense     = ReadInt(obj, "\"def\":"),
+                nHp          = ReadInt(obj, "\"hp\":"),
+                nMp          = ReadInt(obj, "\"mp\":"),
+                bTradable    = true,
+                bDiscardable = true,
+            };
+        }
+
+        static int ReadInt(string s, string key, int def = 0)
+        {
+            int i = s.IndexOf(key);
+            if (i < 0) return def;
+            i += key.Length;
+            // Skip whitespace
+            while (i < s.Length && (s[i] == ' ' || s[i] == '\t')) i++;
+            int start = i;
+            if (i < s.Length && s[i] == '-') i++;
+            while (i < s.Length && s[i] >= '0' && s[i] <= '9') i++;
+            if (start == i) return def;
+            return int.TryParse(s.Substring(start, i - start), out int v) ? v : def;
+        }
+
+        static string ReadStr(string s, string key)
+        {
+            int i = s.IndexOf(key);
+            if (i < 0) return "";
+            i += key.Length;
+            while (i < s.Length && (s[i] == ' ' || s[i] == '\t')) i++;
+            if (i >= s.Length || s[i] != '"') return "";
+            i++; // skip opening quote
+            var sb = new System.Text.StringBuilder();
+            while (i < s.Length)
+            {
+                char c = s[i];
+                if (c == '\\' && i + 1 < s.Length)
+                {
+                    char esc = s[i + 1];
+                    switch (esc)
+                    {
+                        case 'n': sb.Append('\n'); i += 2; break;
+                        case 't': sb.Append('\t'); i += 2; break;
+                        case '"': sb.Append('"');  i += 2; break;
+                        case '\\': sb.Append('\\'); i += 2; break;
+                        case '/':  sb.Append('/');  i += 2; break;
+                        case 'u':
+                            if (i + 5 < s.Length)
+                            {
+                                string hex = s.Substring(i + 2, 4);
+                                if (int.TryParse(hex, System.Globalization.NumberStyles.HexNumber,
+                                                 System.Globalization.CultureInfo.InvariantCulture, out int cp))
+                                    sb.Append((char)cp);
+                                i += 6;
+                            }
+                            else i += 2;
+                            break;
+                        default: sb.Append(esc); i += 2; break;
+                    }
+                    continue;
+                }
+                if (c == '"') return sb.ToString();
+                sb.Append(c);
+                i++;
+            }
+            return sb.ToString();
         }
 
         static void LoadMockData()

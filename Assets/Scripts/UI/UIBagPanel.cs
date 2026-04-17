@@ -219,7 +219,7 @@ namespace KTO.UI
             RefreshUIEquipPanel();
         }
 
-        public void OnOpen(FilterKind initial = FilterKind.TogNormal)
+        public void OnOpen(FilterKind initial = FilterKind.TogAll)
         {
             BagMgr.Init();
             SelectFilter(initial);
@@ -578,10 +578,28 @@ namespace KTO.UI
 
                 // Heuristic path resolution — the KTO item cell prefab varies
                 // in exact names between bundles. We probe common paths.
-                _button = root.GetComponent<Button>() ?? root.GetComponentInChildren<Button>(true);
-                _iconImage = TryFind<Image>(root, "imgItem") ?? TryFind<Image>(root, "icon") ?? TryFind<Image>(root, "Icon");
-                _countText = TryFind<Text>(root, "txtCount") ?? TryFind<Text>(root, "txtNum") ?? TryFind<Text>(root, "Text");
-                _levelText = TryFind<Text>(root, "txtLevel") ?? TryFind<Text>(root, "txtLv");
+                // Cell structure per DetailJSON inspection:
+                //   Item{N}                  — Image + Button (the cell root)
+                //     └── UIItemGrid         — container with layout bits
+                //           ├── ItemLayer    — Image (THE ICON) + Button
+                //           ├── txtCenter    — stack count center text
+                //           ├── txtRBCorner  — stack count bottom-right
+                //           ├── imgRankBg/txtRank — rank/enhance badge
+                //           ├── ImgLTCorner  — enhance level overlay
+                //           └── ... (TagNew/TagTip/CDLayer/etc)
+                _button    = root.GetComponent<Button>() ?? root.GetComponentInChildren<Button>(true);
+                _iconImage = TryFind<Image>(root, "ItemLayer")
+                          ?? TryFind<Image>(root, "imgItem")
+                          ?? TryFind<Image>(root, "icon")
+                          ?? TryFind<Image>(root, "Icon");
+                _countText = TryFind<Text>(root, "txtCenter")
+                          ?? TryFind<Text>(root, "txtRBCorner")
+                          ?? TryFind<Text>(root, "txtCount")
+                          ?? TryFind<Text>(root, "txtNum");
+                _levelText = TryFind<Text>(root, "ImgLTCorner")
+                          ?? TryFind<Text>(root, "txtLTCorner")
+                          ?? TryFind<Text>(root, "txtLevel")
+                          ?? TryFind<Text>(root, "txtLv");
 
                 if (_button != null)
                 {
@@ -595,8 +613,17 @@ namespace KTO.UI
                 _item = item;
                 if (!_root.activeSelf) _root.SetActive(true);
 
+                // Make sure UIItemGrid child is visible (it may have been
+                // hidden by SetEmpty or by an equip-slot-style setup where
+                // empty slots hide the grid in favor of a "Nón" label).
+                var grid = _root.transform.Find("UIItemGrid");
+                if (grid != null && !grid.gameObject.activeSelf)
+                    grid.gameObject.SetActive(true);
+
                 if (_iconImage != null)
                 {
+                    if (!_iconImage.gameObject.activeSelf)
+                        _iconImage.gameObject.SetActive(true);
                     // Try bundle sprite lookup
                     var sp = KResourceModule.LoadSpriteByName(item.Template?.szIcon);
                     if (sp != null)
