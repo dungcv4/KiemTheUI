@@ -211,23 +211,65 @@ namespace KTO.Network
         }
 
         // ── CMD_EQUIP_SYNC (206) ───────────────────────────────────
+        // Format: numSlots[:equipPos:dwId:tmplId:lvl:gem1:gem2]*
+        // Populates EquipMgr (our char-slot cache) + fires emNOTIFY_SYNC_EQUIP.
         void OnEquipSync(string payload)
         {
             var f = KTPacket.SplitFields(payload);
             if (f.Length < 1) return;
             int n = Int(f, 0);
-            // Phase 1: just fire notify; UIEquipPanel will pick up later.
+            const int fieldsPer = 6;
+
+            // Ensure item DB loaded (so Template lookups succeed).
+            KTO.Game.Item.ItemDatabase.LoadAll();
+
+            EquipMgr.ClearAll();
+            for (int i = 0; i < n; i++)
+            {
+                int ofs = 1 + i * fieldsPer;
+                if (f.Length < ofs + fieldsPer) break;
+                var inst = new KTO.Game.Item.ItemInstance
+                {
+                    nPos        = -1,  // not in bag; -1 = equipped
+                    dwId        = Int(f, ofs + 1),
+                    nTemplateId = Int(f, ofs + 2),
+                    nLevel      = Int(f, ofs + 3),
+                    nAmount     = 1,
+                    bEquipped   = true,
+                };
+                int equipPos = Int(f, ofs + 0);
+                EquipMgr.OnSlotUpdate(equipPos, inst);
+            }
             EventNotify.Fire(NotifyEventKind.emNOTIFY_SYNC_EQUIP, n);
-            Debug.Log($"[PlayerDataSync] EQUIP_SYNC {n} slots (UIEquipPanel port pending)");
+            Debug.Log($"[PlayerDataSync] EQUIP_SYNC loaded {n} slots");
         }
 
+        // ── CMD_EQUIP_SLOT_UPDATE (207) ────────────────────────────
+        // Format: equipPos:dwId:tmplId:lvl:gem1:gem2
+        //   dwId=0 means slot cleared (unequip).
         void OnEquipSlotUpdate(string payload)
         {
             var f = KTPacket.SplitFields(payload);
             if (f.Length < 6) return;
-            int pos = Int(f, 0);
+            int pos  = Int(f, 0);
             int dwId = Int(f, 1);
-            EventNotify.Fire(NotifyEventKind.emNOTIFY_USE_UNUSE_EQUIP, dwId != 0, pos, dwId);
+            if (dwId == 0)
+            {
+                EquipMgr.OnSlotUpdate(pos, null);
+            }
+            else
+            {
+                var inst = new KTO.Game.Item.ItemInstance
+                {
+                    nPos        = -1,
+                    dwId        = dwId,
+                    nTemplateId = Int(f, 2),
+                    nLevel      = Int(f, 3),
+                    nAmount     = 1,
+                    bEquipped   = true,
+                };
+                EquipMgr.OnSlotUpdate(pos, inst);
+            }
         }
 
         // Helpers

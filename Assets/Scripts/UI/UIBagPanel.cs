@@ -115,11 +115,14 @@ namespace KTO.UI
                 _cellTemplate.SetActive(false);
             }
 
-            // Subscribe to bag events
+            // Subscribe to bag + equip events so the grid/paperdoll refresh
+            // when the server fires CMD_BAG_ITEM_UPDATE / CMD_EQUIP_SLOT_UPDATE.
             EventNotify.Subscribe(NotifyEventKind.emNOTIFY_SYNC_ITEM,  OnBagChanged);
             EventNotify.Subscribe(NotifyEventKind.emNOTIFY_DEL_ITEM,   OnBagChanged);
             EventNotify.Subscribe(NotifyEventKind.emNOTIFY_EXPAND_BAG_COUNT, OnBagChanged);
             EventNotify.Subscribe(NotifyEventKind.emNOTIFY_FIGHT_POWER_CHANGE, OnFightPowerChanged);
+            EventNotify.Subscribe(NotifyEventKind.emNOTIFY_SYNC_EQUIP, OnEquipChanged);
+            EventNotify.Subscribe(NotifyEventKind.emNOTIFY_USE_UNUSE_EQUIP, OnEquipChanged);
         }
 
         void OnDestroy()
@@ -128,10 +131,19 @@ namespace KTO.UI
             EventNotify.Unsubscribe(NotifyEventKind.emNOTIFY_DEL_ITEM,   OnBagChanged);
             EventNotify.Unsubscribe(NotifyEventKind.emNOTIFY_EXPAND_BAG_COUNT, OnBagChanged);
             EventNotify.Unsubscribe(NotifyEventKind.emNOTIFY_FIGHT_POWER_CHANGE, OnFightPowerChanged);
+            EventNotify.Unsubscribe(NotifyEventKind.emNOTIFY_SYNC_EQUIP, OnEquipChanged);
+            EventNotify.Unsubscribe(NotifyEventKind.emNOTIFY_USE_UNUSE_EQUIP, OnEquipChanged);
         }
 
         void OnBagChanged(object[] _) { if (isActiveAndEnabled) UpdateItemList(); }
         void OnFightPowerChanged(object[] _) { if (isActiveAndEnabled) RefreshUIEquipPanel(); }
+        void OnEquipChanged(object[] _)
+        {
+            if (!isActiveAndEnabled) return;
+            // Equip/unequip changes both paperdoll and which items show in bag.
+            UpdateItemList();
+            RefreshUIEquipPanel();
+        }
 
         public void OnOpen(FilterKind initial = FilterKind.TogNormal)
         {

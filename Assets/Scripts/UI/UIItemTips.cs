@@ -33,6 +33,7 @@ using UnityEngine.EventSystems;
 using KTO.Game;
 using KTO.Game.Item;
 using KTO.Game.Bag;
+using KTO.Network;
 using KResourceModule = KTO.Resource.ResourceModule;
 
 namespace KTO.UI
@@ -193,18 +194,31 @@ namespace KTO.UI
             if (t == null) return;
 
             int x = 12;
-            // Use — potions / consumables
-            if (t.nType == (int)ItemType.Consumable)
+
+            // Is this item currently equipped? (EquipMgr tracks by dwId)
+            bool isEquipped = item.bEquipped || EquipMgr.IsEquipped(item.dwId);
+
+            // Use — potions / consumables (never equipped)
+            if (!isEquipped && t.nType == (int)ItemType.Consumable)
                 x = AddButton("btnUse", "Sử Dụng", x, yTop, () => UseItem(item));
-            // Equip — equipment
+
+            // Equip (bag item with equip slot) / Unequip (already equipped)
             if (t.nEquipPos > 0)
-                x = AddButton("btnEquip", "Trang Bị", x, yTop, () => EquipItem(item));
-            // Sell — anything tradable with sell price
-            if (t.nSellPrice > 0 && t.bTradable)
+            {
+                if (isEquipped)
+                    x = AddButton("btnUnequip", "Tháo", x, yTop, () => UnequipItem(item));
+                else
+                    x = AddButton("btnEquip", "Trang Bị", x, yTop, () => EquipItem(item));
+            }
+
+            // Sell — only for bag items (not equipped) with sell price
+            if (!isEquipped && t.nSellPrice > 0 && t.bTradable)
                 x = AddButton("btnSell", "Bán", x, yTop, () => SellItem(item));
-            // Discard — if allowed
-            if (t.bDiscardable)
+
+            // Discard — only for bag items
+            if (!isEquipped && t.bDiscardable)
                 x = AddButton("btnDiscard", "Xoá", x, yTop, () => DiscardItem(item));
+
             // Close
             AddButton("btnCloseTip", "Đóng", x, yTop, HideInternal);
         }
@@ -265,32 +279,50 @@ namespace KTO.UI
             _item = null;
         }
 
-        // ----- action button callbacks (stubs — server packet calls) -----
+        // ----- action button callbacks — route through BagNetworkClient -----
+        // Each action sends a CMD to the server; the server validates + mutates
+        // state + emits CMD_BAG_ITEM_UPDATE / CMD_EQUIP_SLOT_UPDATE back to us.
+        // UI refresh happens via EventNotify on the response, not here.
+
         void UseItem(ItemInstance item)
         {
-            Debug.Log($"[UIItemTips] Use item {item.szName} (templateId={item.nTemplateId})");
-            // TODO: send packet CMD_KT_C2G_USE_ITEM(item.dwId)
+            BagNetworkClient.UseItem(item.dwId, 1);
             HideInternal();
         }
 
         void EquipItem(ItemInstance item)
         {
-            Debug.Log($"[UIItemTips] Equip item {item.szName} → slot {item.Template?.nEquipPos}");
-            // TODO: send packet CMD_KT_C2G_EQUIP_ITEM(item.dwId, nEquipPos)
+            int equipPos = item.Template?.nEquipPos ?? 0;
+            if (equipPos <= 0) { Debug.LogWarning("[UIItemTips] No equip slot"); return; }
+            BagNetworkClient.EquipItem(item.dwId, equipPos);
+            HideInternal();
+        }
+
+        void UnequipItem(ItemInstance item)
+        {
+            // targetSlot = -1 lets server pick first empty bag slot.
+            BagNetworkClient.UnequipItem(item.dwId, -1);
             HideInternal();
         }
 
         void SellItem(ItemInstance item)
         {
-            Debug.Log($"[UIItemTips] Sell item {item.szName} for {item.Template?.nSellPrice}");
-            UIItemSell.Show(item);
+            // Keep the split-count dialog for stacks > 1; single items
+            // are sold immediately.
+            if (item.nAmount > 1)
+            {
+                UIItemSell.Show(item);
+            }
+            else
+            {
+                BagNetworkClient.SellItem(item.dwId, 1);
+            }
             HideInternal();
         }
 
         void DiscardItem(ItemInstance item)
         {
-            Debug.Log($"[UIItemTips] Discard item {item.szName}");
-            BagMgr.OnDelItem(item.nPos);
+            BagNetworkClient.DropItem(item.dwId, item.nAmount);
             HideInternal();
         }
 

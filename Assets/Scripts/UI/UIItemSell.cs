@@ -178,15 +178,12 @@ namespace KTO.UI
         {
             if (_item == null || _item.Template == null) return;
 
-            long gained = (long)_sellCount * _item.Template.nSellPrice;
-            MoneyMgr.SetMoney(MoneyMgr.MoneyType.Coin,
-                MoneyMgr.GetMoney(MoneyMgr.MoneyType.Coin) + gained);
-
-            _item.nAmount -= _sellCount;
-            if (_item.nAmount <= 0) BagMgr.OnDelItem(_item.nPos);
-            else                     BagMgr.OnSyncItem(_item.nPos, _item);
-
-            Debug.Log($"[UIItemSell] Sold {_sellCount}× {_item.szName} for {gained} coin");
+            // Route through server — server validates (NPC nearby, item
+            // sellable, etc.), mutates state, persists to DB, and echoes
+            // back CMD_BAG_ITEM_UPDATE + CMD_MONEY_CHANGE which drives
+            // the client refresh via EventNotify. No local mutation here.
+            KTO.Network.BagNetworkClient.SellItem(_item.dwId, _sellCount);
+            Debug.Log($"[UIItemSell] SellItem dwId={_item.dwId} count={_sellCount}");
             Destroy(_rootGo);
         }
     }
