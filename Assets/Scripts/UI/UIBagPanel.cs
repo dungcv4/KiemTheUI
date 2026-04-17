@@ -217,6 +217,68 @@ namespace KTO.UI
             // Equip/unequip changes both paperdoll and which items show in bag.
             UpdateItemList();
             RefreshUIEquipPanel();
+            RefreshEquipSlotIcons();
+        }
+
+        // ── Paperdoll icons on equip / label on empty ──
+        //
+        // Port of Script_Ui_Common_UIEquipPanel.lua tbWnd:SetEquip()
+        // (line 252 — if nItemId>0: show icon, hide label; else opposite).
+        //
+        // Maps EquipMgr.EquipSlot → prefab path and toggles visibility of
+        // the slot's Text (Vietnamese label) + UIItemGrid (item icon).
+        void RefreshEquipSlotIcons()
+        {
+            const string root = "UIEquipPanel/EquipPanel/PanelEquip";
+            var slotPaths = new System.Collections.Generic.Dictionary<KTO.Game.Bag.EquipSlot, string>
+            {
+                { KTO.Game.Bag.EquipSlot.Helm,     $"{root}/grid1/Helm" },
+                { KTO.Game.Bag.EquipSlot.Cuff,     $"{root}/grid1/Cuff" },
+                { KTO.Game.Bag.EquipSlot.Armor,    $"{root}/grid1/Armor" },
+                { KTO.Game.Bag.EquipSlot.Belt,     $"{root}/grid1/Belt" },
+                { KTO.Game.Bag.EquipSlot.Boots,    $"{root}/grid1/Boots" },
+                { KTO.Game.Bag.EquipSlot.Weapon,   $"{root}/grid2/Weapon" },
+                { KTO.Game.Bag.EquipSlot.Necklace, $"{root}/grid2/Necklace" },
+                { KTO.Game.Bag.EquipSlot.Ring,     $"{root}/grid2/Ring" },
+                { KTO.Game.Bag.EquipSlot.Pendant,  $"{root}/grid2/Pendant" },
+                { KTO.Game.Bag.EquipSlot.Amulet,   $"{root}/grid2/Amulet" },
+            };
+            foreach (var kv in slotPaths)
+            {
+                var slotTr = _panel.Find(kv.Value);
+                if (slotTr == null) continue;
+                var inst = KTO.Game.Bag.EquipMgr.Get(kv.Key);
+                var label  = slotTr.Find("Text");
+                var grid   = slotTr.Find("UIItemGrid");
+                bool occupied = inst != null && inst.dwId != 0;
+
+                if (label != null) label.gameObject.SetActive(!occupied);
+                if (grid != null)
+                {
+                    grid.gameObject.SetActive(occupied);
+                    if (occupied)
+                    {
+                        // Plug the item's icon into UIItemGrid/ItemLayer
+                        var itemLayerImg = grid.Find("ItemLayer")?.GetComponent<Image>();
+                        if (itemLayerImg != null)
+                        {
+                            var sp = KResourceModule.LoadSpriteByName(inst.Template?.szIcon);
+                            if (sp != null)
+                            {
+                                itemLayerImg.sprite = sp;
+                                itemLayerImg.color  = Color.white;
+                            }
+                            else
+                            {
+                                // No icon — show rarity-tinted rect so the
+                                // slot still reads as "equipped" (not empty).
+                                itemLayerImg.sprite = null;
+                                itemLayerImg.color  = ItemDatabase.ColorForRarity(inst.nColor);
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         public void OnOpen(FilterKind initial = FilterKind.TogAll)
@@ -524,6 +586,10 @@ namespace KTO.UI
             if (_cellTemplate == null || _gridContent == null) return;
 
             // Step 1: adopt the 5 shipped prototypes on first call.
+            // Also strip the bogus bg/Base sprites the import pipeline
+            // assigned (DetailJSON shows these should be null on empty
+            // cells — the importer picked dark HUD sprites as fallbacks
+            // which made every cell look like a dark brown box).
             if (_cells.Count == 0)
             {
                 for (int i = 1; i <= 5; i++)
@@ -531,6 +597,7 @@ namespace KTO.UI
                     var slot = _gridContent.Find($"Item{i}");
                     if (slot == null) continue;
                     slot.gameObject.SetActive(true);
+                    StripCellBackdrop(slot);
                     var cell = new ItemCell(slot.gameObject);
                     _cells.Add(cell);
                     cell.SetEmpty();
@@ -543,9 +610,31 @@ namespace KTO.UI
                 var go = Instantiate(_cellTemplate, _gridContent);
                 go.SetActive(true);
                 go.name = $"ItemCell_{_cells.Count}";
+                StripCellBackdrop(go.transform);
                 var cell = new ItemCell(go);
                 _cells.Add(cell);
                 cell.SetEmpty();
+            }
+        }
+
+        // Null out the sprites the import pipeline wrongly assigned to
+        // a cell's backdrop layers (bg, Base, ItemLayer). The original
+        // DetailJSON has these as sprite=null/color=white — the game's
+        // Lua then assigns real sprites only when an item is equipped.
+        // Our importer fell back to HUD placeholder sprites (itemframebg,
+        // itembaseOrange, chunyangwuji) which made every cell look like
+        // a dark brown box.
+        static void StripCellBackdrop(Transform cellRoot)
+        {
+            string[] layers = { "UIItemGrid/bg", "UIItemGrid/Base", "UIItemGrid/ItemLayer" };
+            foreach (var p in layers)
+            {
+                var tr = cellRoot.Find(p);
+                if (tr == null) continue;
+                var img = tr.GetComponent<Image>();
+                if (img == null) continue;
+                img.sprite = null;
+                img.color  = new Color(1f, 1f, 1f, 0f);  // fully transparent
             }
         }
 
@@ -633,10 +722,13 @@ namespace KTO.UI
                     }
                     else
                     {
-                        // Colored placeholder — tint by rarity so the grid
-                        // still conveys item kind when icon sprite is missing.
+                        // No sprite found — keep the icon transparent (match
+                        // original behavior: empty slot = no icon). The
+                        // rarity-colored placeholder made the grid noisy
+                        // since it's drawn on top of bg, producing the
+                        // dark-brown look user flagged.
                         _iconImage.sprite = null;
-                        _iconImage.color = ItemDatabase.ColorForRarity(item.nColor);
+                        _iconImage.color = new Color(1f, 1f, 1f, 0f);
                     }
                 }
 
