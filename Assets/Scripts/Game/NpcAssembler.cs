@@ -5,6 +5,10 @@ using UnityEngine.Rendering;
 using UnityEditor;
 #endif
 
+// Alias to avoid collision with Assembly-CSharp empty stubs (global namespace)
+using KResourceDef = KTO.Resource.ResourceDef;
+using KBundleManager = KTO.Resource.BundleManager;
+
 namespace KTO.Game
 {
     // =======================================================================
@@ -112,6 +116,43 @@ namespace KTO.Game
             var dict = new Dictionary<string, Sprite>();
             _spriteCacheByRes[resName] = dict;
 
+            // Phase R3: Try loading from AssetBundle first
+            // Source: npc/{resName}/res_n_1 bundle (matches BundleBuildPipeline.AssignNpcBundleNames)
+            // Original: BundleManager loads npc bundle, extracts all sprites
+            string bundlePath = $"npc/{resName.ToLower()}/res_n_1";
+            string fullPath = KResourceDef.GetResourceFullPath(bundlePath, false);
+
+            if (!string.IsNullOrEmpty(fullPath))
+            {
+                // Bundle exists — load all sprites from it (sync)
+                var ab = KBundleManager.GetBundle(bundlePath);
+                if (ab == null)
+                {
+                    ab = AssetBundle.LoadFromFile(fullPath);
+                    if (ab == null)
+                    {
+                        Debug.LogWarning($"[NpcAssembler] Failed to load bundle: {bundlePath}");
+                    }
+                }
+
+                if (ab != null)
+                {
+                    var sprites = ab.LoadAllAssets<Sprite>();
+                    int loaded = 0;
+                    foreach (var s in sprites)
+                    {
+                        if (!dict.ContainsKey(s.name))
+                        {
+                            dict[s.name] = s;
+                            loaded++;
+                        }
+                    }
+                    Debug.Log($"[NpcAssembler] Sprite cache '{resName}': {loaded} entries from bundle");
+                    return;
+                }
+            }
+
+            // Fallback: editor AssetDatabase (for development before bundles are built)
 #if UNITY_EDITOR
             var root = $"Assets/Sprite/Npc/{resName}";
             if (!System.IO.Directory.Exists(root))
@@ -120,12 +161,10 @@ namespace KTO.Game
                 return;
             }
             var guids = AssetDatabase.FindAssets("t:Texture2D", new[] { root });
-            int loaded = 0;
+            int editorLoaded = 0;
             foreach (var g in guids)
             {
                 var path = AssetDatabase.GUIDToAssetPath(g);
-                // Extracted PNGs are import-set as Sprite (single mode).
-                // Try sub-sprites first; fall back to main asset.
                 var subs = AssetDatabase.LoadAllAssetRepresentationsAtPath(path);
                 bool added = false;
                 foreach (var o in subs)
@@ -133,7 +172,7 @@ namespace KTO.Game
                     if (o is Sprite s && !dict.ContainsKey(s.name))
                     {
                         dict[s.name] = s;
-                        loaded++;
+                        editorLoaded++;
                         added = true;
                     }
                 }
@@ -143,13 +182,13 @@ namespace KTO.Game
                     if (main != null && !dict.ContainsKey(main.name))
                     {
                         dict[main.name] = main;
-                        loaded++;
+                        editorLoaded++;
                     }
                 }
             }
-            Debug.Log($"[NpcAssembler] Sprite cache '{resName}': {loaded} entries");
+            Debug.Log($"[NpcAssembler] Sprite cache '{resName}': {editorLoaded} entries (editor fallback)");
 #else
-            Debug.LogWarning($"[NpcAssembler] Runtime sprite cache for '{resName}' not implemented (editor-only for now)");
+            Debug.LogWarning($"[NpcAssembler] No bundle found for NPC '{resName}' — run 'KTO → Build → Build All Bundles'");
 #endif
         }
 

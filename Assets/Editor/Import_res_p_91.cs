@@ -5088,7 +5088,7 @@ public class Import_res_p_91
            c.enabled = true;
         }
         { var c = goMap[2454216099731908947L].AddComponent<Text>();
-           c.text = "文字文字";
+           c.text = ""; // placeholder — Lua runtime populates this dynamically
            c.color = new Color(0.113725f, 0.309804f, 0.321569f, 1.000000f);
            c.fontSize = 20;
            c.fontStyle = FontStyle.Bold;
@@ -5123,7 +5123,7 @@ public class Import_res_p_91
            c.enabled = true;
         }
         { var c = goMap[9006087099681931171L].AddComponent<Text>();
-           c.text = "文字文字";
+           c.text = ""; // placeholder — Lua runtime populates this dynamically
            c.color = new Color(0.113725f, 0.309804f, 0.321569f, 1.000000f);
            c.fontSize = 20;
            c.fontStyle = FontStyle.Bold;

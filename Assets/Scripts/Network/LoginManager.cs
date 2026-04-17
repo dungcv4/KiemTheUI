@@ -78,6 +78,21 @@ namespace KTO.Network
             if (Instance != null && Instance != this) { Destroy(gameObject); return; }
             Instance = this;
             DontDestroyOnLoad(gameObject);
+
+            // Ensure PlayerDataSyncHandler is registered EARLY — before CMD_PLAY_GAME.
+            // Otherwise CMD_PLAYER_STATE (200) arrives during scene transition
+            // from CreateRoleScene→MainUIScene and gets dropped (no handler).
+            // GameStart in MainUIScene also spawns it; the null-check below makes
+            // that a no-op when this Awake already did the work.
+            if (PlayerDataSyncHandler.Instance == null)
+            {
+                var psGo = new GameObject("[PlayerDataSyncHandler]");
+                psGo.AddComponent<PlayerDataSyncHandler>();
+            }
+
+            // Also pre-load the PlayerStatCalculator tabs so any early CMD 200
+            // can compute derived stats immediately.
+            KTO.Game.Player.PlayerStatCalculator.Load();
         }
 
         void Start()
@@ -188,13 +203,51 @@ namespace KTO.Network
         /// <summary>
         /// Step 2: Connect to selected game server + send CMD_LOGIN_ON2.
         /// Call this from SelectServer UI when user picks a server.
+        ///
+        /// IDEMPOTENT: if we're already connected to <paramref name="server"/>
+        /// and the session has progressed past LOGIN_ON2 (RoleList/Ready),
+        /// this is a no-op. Prior behavior disconnected the live session and
+        /// re-ran LOGIN_ON2 → server closed the duplicate login → Enter Game
+        /// then failed with "Not connected, cannot send CMD 104".
+        ///
+        /// Source of bug: 2026-04-17 flow had both `DebugLogin` auto-connect
+        /// AND `LoginSceneController.OnEnterGame` → `ConnectToServer`, so the
+        /// same server was getting dialed twice. The second dial races with
+        /// the already-authenticated first session and the server rejects it.
         /// </summary>
         public void ConnectToServer(ServerInfo server)
         {
             SelectedServer = server;
+
+            // Already connected + authed? Just re-route to RoleList state if
+            // the UI is expecting a ConnectToServer callback to advance.
+            var net = NetworkManager.Instance;
+            bool sameServer = net != null
+                && server != null
+                && net.TCP != null
+                && net.TCP.IsConnected
+                && net.gameHost == server.URL
+                && net.gamePort == server.Port;
+
+            bool sessionActive = State == LoginState.Ready
+                              || State == LoginState.RoleList
+                              || State == LoginState.LoginOn
+                              || State == LoginState.LoginOn2;
+
+            if (sameServer && sessionActive)
+            {
+                Debug.Log($"[Login] Already connected to {server.ServerName} " +
+                          $"({server.URL}:{server.Port}) with state={State} — skipping redial");
+                // Re-fire the RoleListReceived event so UI listeners that
+                // attached AFTER the first auto-connect still see the roles.
+                if (Roles != null && Roles.Count > 0)
+                    OnRoleListReceived?.Invoke(Roles);
+                return;
+            }
+
             SetState(LoginState.Connecting);
             Debug.Log($"[Login] Connecting to {server.ServerName} ({server.URL}:{server.Port})");
-            NetworkManager.Instance.ConnectGameServer(server.URL, server.Port);
+            net.ConnectGameServer(server.URL, server.Port);
         }
 
         /// <summary>
@@ -204,9 +257,38 @@ namespace KTO.Network
         {
             _pendingRoleID = roleID;
             var net = NetworkManager.Instance;
+            if (net == null)
+            {
+                Debug.LogError("[Login] SelectRole: NetworkManager.Instance null — cannot send CMD_INIT_GAME");
+                return;
+            }
+            if (net.TCP == null || !net.TCP.IsConnected)
+            {
+                // Auto-reconnect to current server and retry. This is what the
+                // UI expected when it called SelectRole blindly after a scene
+                // reload — the old session was severed but SelectedServer still
+                // points at the right host:port.
+                Debug.LogWarning("[Login] SelectRole: TCP not connected — attempting reconnect before CMD_INIT_GAME");
+                if (SelectedServer != null)
+                {
+                    _pendingRoleAfterConnect = roleID;
+                    SetState(LoginState.Connecting);
+                    net.ConnectGameServer(SelectedServer.URL, SelectedServer.Port);
+                }
+                else
+                {
+                    SetError("Disconnected — no server to reconnect to");
+                }
+                return;
+            }
             net.SendCmd(LoginProtocol.CMD_INIT_GAME,
                 PlatformUserID, roleID, SystemInfo.deviceUniqueIdentifier, SystemInfo.deviceModel);
         }
+
+        // If SelectRole is called while disconnected, we kick off a reconnect
+        // and stash the roleID here so OnRoleListReceived (after the reconnect
+        // completes) can re-issue CMD_INIT_GAME automatically. 0 = none pending.
+        private int _pendingRoleAfterConnect;
 
         // Phase A: roleID we're handing off init→play with
         private int _pendingRoleID;
@@ -412,6 +494,17 @@ namespace KTO.Network
             Debug.Log($"[Login] Got {Roles.Count} roles");
             OnRoleListReceived?.Invoke(Roles);
             SetState(LoginState.Ready);
+
+            // If SelectRole was called while disconnected, the reconnect has
+            // now completed and role list is back. Auto-fire CMD_INIT_GAME
+            // with the role we stashed.
+            if (_pendingRoleAfterConnect != 0)
+            {
+                int id = _pendingRoleAfterConnect;
+                _pendingRoleAfterConnect = 0;
+                Debug.Log($"[Login] Resuming deferred SelectRole({id}) after reconnect");
+                SelectRole(id);
+            }
         }
 
         // ── CMD_CREATE_ROLE (cmd 102) ──

@@ -1187,34 +1187,24 @@ public class LoginSceneController : MonoBehaviour
     }
 
     /// <summary>
-    /// Look up a sprite by name from the project at runtime.
-    /// When sameAtlasAs is provided, prefer a sprite whose texture matches
-    /// (avoids cross-atlas name collisions: e.g. btn_tap5_1 exists in both
-    /// "common" atlas (teal) and "common_btn" atlas (golden)).
+    /// Look up a sprite by name from atlas bundles via ResourceModule.
+    /// Source: Original uses LoaderManager.Load(szPath) → BundleManager.s_fileAbInfo
+    /// We use SpriteAtlasMap → ResourceModule.LoadSpriteByName for the same purpose.
     /// </summary>
     static Sprite LookupSpriteRuntime(string spriteName, Sprite sameAtlasAs = null)
     {
-        #if UNITY_EDITOR
+        // Load from atlas bundles via SpriteAtlasMap
+        var sprite = KTO.Resource.ResourceModule.LoadSpriteByName(spriteName);
+        if (sprite != null) return sprite;
+
+        // Fallback for sprites not in atlas bundles (e.g. loose .asset files)
+#if UNITY_EDITOR
         Sprite fallback = null;
         string[] guids = UnityEditor.AssetDatabase.FindAssets(
             $"{spriteName} t:Sprite", new[] { "Assets/Sprite" });
         foreach (var guid in guids)
         {
             string path = UnityEditor.AssetDatabase.GUIDToAssetPath(guid);
-            // Load all sub-assets (for .asset atlas files)
-            var objs = UnityEditor.AssetDatabase.LoadAllAssetsAtPath(path);
-            foreach (var obj in objs)
-            {
-                if (obj is Sprite sp && sp.name == spriteName)
-                {
-                    // If same-atlas matching requested, prefer texture match
-                    if (sameAtlasAs != null && sameAtlasAs.texture != null
-                        && sp.texture == sameAtlasAs.texture)
-                        return sp;
-                    if (fallback == null) fallback = sp;
-                }
-            }
-            // Try direct load (for .png files)
             var direct = UnityEditor.AssetDatabase.LoadAssetAtPath<Sprite>(path);
             if (direct != null && direct.name == spriteName)
             {
@@ -1225,9 +1215,9 @@ public class LoginSceneController : MonoBehaviour
             }
         }
         return fallback;
-        #else
+#else
         return null;
-        #endif
+#endif
     }
 
     // ══════════════════════════════════════════════════════════
@@ -1245,13 +1235,19 @@ public class LoginSceneController : MonoBehaviour
         if (panel != null) panel.SetActive(active);
     }
 
+    /// <summary>
+    /// Load a UI prefab from view bundles.
+    /// Source: Original uses LoaderManager.Load("ui/views/res_p_XX") → BundleManager
+    /// We use ResourceModule.LoadPrefabSync which tries bundles first, editor fallback.
+    /// </summary>
     static GameObject LoadPrefab(string name)
     {
-        #if UNITY_EDITOR
-        string path = $"Assets/Prefabs/Imported/{name}.prefab";
-        var prefab = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>(path);
+        // Try bundle first: ui/views/{name_lowercase}
+        string bundlePath = $"ui/views/{name.ToLower()}";
+        var prefab = KTO.Resource.ResourceModule.LoadPrefabSync(bundlePath, name);
         if (prefab != null) return prefab;
-        #endif
+
+        // Fallback: Resources
         return Resources.Load<GameObject>(name);
     }
 

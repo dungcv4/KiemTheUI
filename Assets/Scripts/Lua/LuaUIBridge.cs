@@ -3,6 +3,8 @@ using UnityEngine.UI;
 using TMPro;
 using MoonSharp.Interpreter;
 using System.Collections.Generic;
+// Alias to avoid collision with Assembly-CSharp empty stubs (global namespace)
+using KResourceModule = KTO.Resource.ResourceModule;
 
 /// <summary>
 /// Bridge layer: Lua gọi các hàm này để tương tác với Unity UI.
@@ -121,30 +123,24 @@ public class LuaUIBridge
 
     // Sprite lookup cache shared across all bridges. Used by Sprite_SetSprite to
     // resolve names like "img_factioninfo_shaolin" or "faction_wudang" from
-    // Assets/Sprite/ via AssetDatabase (editor-only, but Play mode in editor works).
+    // atlas bundles via ResourceModule → SpriteAtlasMap.
+    //
+    // Source: UIPanel.Sprite_SetSprite (IL2CPP UIPanel.c:2665-2756)
+    //   calls LoaderManager.Load(szPath) → gets sprite from atlas bundle
+    //   then attaches ReferenceLoader to the Image's GameObject
     private static readonly Dictionary<string, Sprite> _spriteCache = new Dictionary<string, Sprite>();
 
     private static Sprite LookupSprite(string name)
     {
         if (_spriteCache.TryGetValue(name, out var s)) return s;
 
-        // Try Resources first (for any future sprites placed under Resources/Sprites/)
-        s = Resources.Load<Sprite>($"Sprites/{name}");
-#if UNITY_EDITOR
-        if (s == null)
-        {
-            var guids = UnityEditor.AssetDatabase.FindAssets($"t:Sprite {name}");
-            foreach (var guid in guids)
-            {
-                var assetPath = UnityEditor.AssetDatabase.GUIDToAssetPath(guid);
-                // FindAssets is fuzzy — only accept exact filename match
-                if (System.IO.Path.GetFileNameWithoutExtension(assetPath) != name) continue;
-                s = UnityEditor.AssetDatabase.LoadAssetAtPath<Sprite>(assetPath);
-                if (s != null) break;
-            }
-        }
-#endif
-        _spriteCache[name] = s; // cache misses too to avoid repeated AssetDatabase scans
+        // Load from atlas bundles via SpriteAtlasMap → ResourceModule
+        // Source: Original flow is LoaderManager.Load(szPath) which resolves
+        // the asset path to a bundle via BundleManager.s_fileAbInfo.
+        // We use SpriteAtlasMap for the same purpose.
+        s = KResourceModule.LoadSpriteByName(name);
+
+        _spriteCache[name] = s; // cache misses too to avoid repeated scans
         return s;
     }
 

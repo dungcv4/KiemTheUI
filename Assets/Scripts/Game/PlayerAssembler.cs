@@ -5,6 +5,10 @@ using UnityEngine.Rendering;
 using UnityEditor;
 #endif
 
+// Alias to avoid collision with Assembly-CSharp empty stubs (global namespace)
+using KResourceDef = KTO.Resource.ResourceDef;
+using KBundleManager = KTO.Resource.BundleManager;
+
 namespace KTO.Game
 {
     public enum NpcAction
@@ -146,10 +150,44 @@ namespace KTO.Game
         public static void EnsureSpriteCache()
         {
             if (_spriteCacheLoaded) return;
+
+            // Phase R3: Try loading from AssetBundle first
+            // Source: player/res_pl_1 bundle (matches BundleBuildPipeline.AssignPlayerBundleNames)
+            // Original: BundleManager loads player sprite bundle, extracts all sprites
+            string bundlePath = "player/res_pl_1";
+            string fullPath = KResourceDef.GetResourceFullPath(bundlePath, false);
+
+            if (!string.IsNullOrEmpty(fullPath))
+            {
+                var ab = KBundleManager.GetBundle(bundlePath);
+                if (ab == null)
+                {
+                    ab = AssetBundle.LoadFromFile(fullPath);
+                }
+
+                if (ab != null)
+                {
+                    var sprites = ab.LoadAllAssets<Sprite>();
+                    int loaded = 0;
+                    foreach (var s in sprites)
+                    {
+                        if (!_spriteCache.ContainsKey(s.name))
+                        {
+                            _spriteCache[s.name] = s;
+                            loaded++;
+                        }
+                    }
+                    Debug.Log($"[PlayerAssembler] Sprite cache: {loaded} entries from bundle");
+                    _spriteCacheLoaded = true;
+                    return;
+                }
+            }
+
+            // Fallback: editor AssetDatabase (for development before bundles are built)
 #if UNITY_EDITOR
             var root = "Assets/Sprite/Player";
             var guids = AssetDatabase.FindAssets("t:Texture2D", new[] { root });
-            int loaded = 0;
+            int editorLoaded = 0;
             foreach (var g in guids)
             {
                 var path = AssetDatabase.GUIDToAssetPath(g);
@@ -159,7 +197,7 @@ namespace KTO.Game
                     if (o is Sprite s && !_spriteCache.ContainsKey(s.name))
                     {
                         _spriteCache[s.name] = s;
-                        loaded++;
+                        editorLoaded++;
                     }
                 }
                 if (subs.Length == 0)
@@ -168,13 +206,13 @@ namespace KTO.Game
                     if (main != null && !_spriteCache.ContainsKey(main.name))
                     {
                         _spriteCache[main.name] = main;
-                        loaded++;
+                        editorLoaded++;
                     }
                 }
             }
-            Debug.Log($"[PlayerAssembler] Sprite cache: {loaded} entries from {root}");
+            Debug.Log($"[PlayerAssembler] Sprite cache: {editorLoaded} entries (editor fallback)");
 #else
-            Debug.LogWarning("[PlayerAssembler] Runtime sprite cache not implemented (editor-only for now)");
+            Debug.LogWarning("[PlayerAssembler] No bundle found — run 'KTO → Build → Build All Bundles'");
 #endif
             _spriteCacheLoaded = true;
         }

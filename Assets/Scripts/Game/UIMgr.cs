@@ -51,8 +51,28 @@ namespace KTO.Game
                 inst.name = prefab.name;
                 SetLayerRecursive(inst, uiLayer);
                 var canvas = inst.GetComponent<Canvas>();
-                if (canvas != null && canvas.renderMode == RenderMode.ScreenSpaceCamera && canvas.worldCamera == null)
+                if (canvas != null)
+                {
+                    // Imported KTO prefabs arrive as WorldSpace Canvas; the original
+                    // game re-assigns ScreenSpaceCamera at instantiate time. Force
+                    // the render mode + hook our UICamera so the HUD actually draws.
+                    canvas.renderMode = RenderMode.ScreenSpaceCamera;
                     canvas.worldCamera = UICamera;
+                    canvas.planeDistance = 10f;
+                    canvas.sortingLayerName = "Default";
+                    canvas.sortingOrder = 0;
+
+                    // CanvasScaler sizeDelta comes from reference resolution; force
+                    // a rebuild so the Canvas isn't 0x0.
+                    var rt = inst.transform as RectTransform;
+                    if (rt != null)
+                    {
+                        rt.anchorMin = Vector2.zero;
+                        rt.anchorMax = Vector2.one;
+                        rt.offsetMin = Vector2.zero;
+                        rt.offsetMax = Vector2.zero;
+                    }
+                }
                 spawned++;
                 yield return null;
             }

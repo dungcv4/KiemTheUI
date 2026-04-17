@@ -415,22 +415,15 @@ public static class UICreateRoleAvatarController
             var bgImg = lbgBg.GetComponent<Image>();
             if (bgImg != null)
             {
-#if UNITY_EDITOR
-                var guids = AssetDatabase.FindAssets("t:Sprite createrole_bg");
-                foreach (var g in guids)
+                // Load from atlas bundle: ui/atlas/createrole/res_a_1
+                var spr = KTO.Resource.ResourceModule.LoadSpriteByName("createrole_bg");
+                if (spr != null)
                 {
-                    var path = AssetDatabase.GUIDToAssetPath(g);
-                    var spr = AssetDatabase.LoadAssetAtPath<Sprite>(path);
-                    if (spr != null && spr.name == "createrole_bg")
-                    {
-                        bgImg.sprite = spr;
-                        bgImg.type = Image.Type.Simple;
-                        bgImg.preserveAspect = false;
-                        bgImg.enabled = true;
-                        break;
-                    }
+                    bgImg.sprite = spr;
+                    bgImg.type = Image.Type.Simple;
+                    bgImg.preserveAspect = false;
+                    bgImg.enabled = true;
                 }
-#endif
             }
         }
 
@@ -558,29 +551,24 @@ public static class UICreateRoleAvatarController
         if (img == null) return;
         string spriteName = kRadarSprite[factionId - 1];
         if (img.sprite != null && img.sprite.name == spriteName) return;
-#if UNITY_EDITOR
-        Sprite assetMatch = null, pngMatch = null;
-        var guids = AssetDatabase.FindAssets("t:Sprite " + spriteName);
-        foreach (var g in guids)
-        {
-            var p = AssetDatabase.GUIDToAssetPath(g);
-            var s = AssetDatabase.LoadAssetAtPath<Sprite>(p);
-            if (s == null || s.name != spriteName) continue;
-            if (p.EndsWith(".asset")) { assetMatch = s; break; }
-            if (pngMatch == null) pngMatch = s;
-        }
-        var picked = assetMatch ?? pngMatch;
+        // Load from atlas bundle via SpriteAtlasMap
+        var picked = KTO.Resource.ResourceModule.LoadSpriteByName(spriteName);
         if (picked != null)
         {
             img.sprite = picked;
             img.SetNativeSize();
             img.SetAllDirty();
         }
-#endif
     }
 
     static GameObject LoadPrefab(string path)
     {
+        // Try extracting prefab name from path and loading from bundle
+        string name = System.IO.Path.GetFileNameWithoutExtension(path);
+        string bundlePath = $"ui/views/{name.ToLower()}";
+        var go = KTO.Resource.ResourceModule.LoadPrefabSync(bundlePath, name);
+        if (go != null) return go;
+
 #if UNITY_EDITOR
         return AssetDatabase.LoadAssetAtPath<GameObject>(path);
 #else
@@ -601,23 +589,15 @@ public static class UICreateRoleAvatarController
         SetSpritePreferAtlas(imgFemale, male ? kSpriteFemaleUnselect : kSpriteFemaleSelect);
     }
 
+    /// <summary>
+    /// Load sprite from atlas bundles, with editor fallback.
+    /// Source: Original uses LoaderManager.Load(atlasPath) → sprite extraction
+    /// </summary>
     static void SetSpritePreferAtlas(Image img, string spriteName)
     {
         if (img == null || string.IsNullOrEmpty(spriteName)) return;
         if (img.sprite != null && img.sprite.name == spriteName) return;
-#if UNITY_EDITOR
-        Sprite assetMatch = null, pngMatch = null;
-        var guids = AssetDatabase.FindAssets("t:Sprite " + spriteName);
-        foreach (var g in guids)
-        {
-            var p = AssetDatabase.GUIDToAssetPath(g);
-            var s = AssetDatabase.LoadAssetAtPath<Sprite>(p);
-            if (s == null || s.name != spriteName) continue;
-            if (p.EndsWith(".asset")) { assetMatch = s; break; }
-            if (pngMatch == null) pngMatch = s;
-        }
-        var picked = assetMatch ?? pngMatch;
+        var picked = KTO.Resource.ResourceModule.LoadSpriteByName(spriteName);
         if (picked != null) { img.sprite = picked; img.SetAllDirty(); }
-#endif
     }
 }

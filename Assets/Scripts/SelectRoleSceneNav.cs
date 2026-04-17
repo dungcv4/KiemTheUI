@@ -170,7 +170,6 @@ public class SelectRoleSceneNav : MonoBehaviour
 
     static void EnsureCharacterInstances(GameObject selectRoot)
     {
-#if UNITY_EDITOR
         var imgBG = selectRoot.transform.Find("imgBG");
         if (imgBG == null) { Debug.LogWarning("[SelectRoleSceneNav] imgBG not found"); return; }
 
@@ -180,7 +179,11 @@ public class SelectRoleSceneNav : MonoBehaviour
 
         // Drop the legacy single-Image preview if a previous run left one.
         var legacy = imgBG.Find("CharacterPreview");
+#if UNITY_EDITOR
         if (legacy != null) DestroyImmediate(legacy.gameObject);
+#else
+        if (legacy != null) Object.Destroy(legacy.gameObject);
+#endif
 
         foreach (var kv in Roles)
         {
@@ -195,9 +198,19 @@ public class SelectRoleSceneNav : MonoBehaviour
             }
             else
             {
-                var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(entry.PrefabPath);
+                // Try bundle first, then editor fallback
+                string bundlePath = $"ui/views/{instName.ToLower()}";
+                var prefab = KTO.Resource.ResourceModule.LoadPrefabSync(bundlePath, instName);
+#if UNITY_EDITOR
+                if (prefab == null)
+                    prefab = AssetDatabase.LoadAssetAtPath<GameObject>(entry.PrefabPath);
+#endif
                 if (prefab == null) { Debug.LogWarning($"[SelectRoleSceneNav] missing prefab: {entry.PrefabPath}"); continue; }
+#if UNITY_EDITOR
                 inst = (GameObject)PrefabUtility.InstantiatePrefab(prefab, imgBG);
+#else
+                inst = Object.Instantiate(prefab, imgBG);
+#endif
                 inst.name = instName;
                 inst.transform.SetSiblingIndex(siblingIndex);
             }
@@ -225,7 +238,6 @@ public class SelectRoleSceneNav : MonoBehaviour
             entry.Instance = inst;
             entry.Animator = anim;
         }
-#endif
     }
 
     static void WireRoleListSelection(GameObject selectRoot)
@@ -244,14 +256,17 @@ public class SelectRoleSceneNav : MonoBehaviour
         var vpImg = viewport != null ? viewport.GetComponent<Image>() : null;
         if (vpImg != null && vpImg.sprite == null)
         {
+            // Load Unity's built-in UISprite — works in both editor and builds
+            var defaultSprite = Resources.GetBuiltinResource<Sprite>("UI/Skin/UISprite.psd");
 #if UNITY_EDITOR
-            var defaultSprite = UnityEditor.AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/UISprite.psd");
+            if (defaultSprite == null)
+                defaultSprite = UnityEditor.AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/UISprite.psd");
+#endif
             if (defaultSprite != null)
             {
                 vpImg.sprite = defaultSprite;
                 vpImg.type = Image.Type.Sliced;
             }
-#endif
             vpImg.color = new Color(1f, 1f, 1f, 1f);
             vpImg.raycastTarget = false;
         }
@@ -303,30 +318,100 @@ public class SelectRoleSceneNav : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Load stand animation frames from atlas bundles.
+    /// Source: Original loginbg character stand frames are in ui/atlas/loginbg/res_a_1 bundle.
+    /// Frames named like M_SL_stand_0001, M_SL_stand_0002, etc.
+    /// </summary>
     static Sprite[] LoadStandFrames(string prefix)
     {
-#if UNITY_EDITOR
-        // Find every sprite asset whose filename starts with "<prefix>_stand_"
-        // and whose remaining tail is purely a frame number (e.g. 0001), skipping
-        // layered variants like _1/_2/_3 (those are decoration overlays).
-        // The same frame may exist in multiple folders (Sprite/loginbg + Texture2D);
-        // dedupe by filename so each frame plays only once per loop.
-        var guids = AssetDatabase.FindAssets($"t:Sprite {prefix}_stand");
-        var byFrame = new Dictionary<string, string>(); // fileName → preferred path
+        var frameList = new List<Sprite>();
         var head = prefix + "_stand_";
+
+        // Try loading all sprites from loginbg atlas bundle
+        string bundlePath = "ui/atlas/loginbg/res_a_1";
+        string fullPath = KTO.Resource.ResourceDef.GetResourceFullPath(bundlePath, false);
+        if (!string.IsNullOrEmpty(fullPath))
+        {
+            var ab = KTO.Resource.BundleManager.GetBundle(bundlePath);
+            if (ab == null)
+                ab = UnityEngine.AssetBundle.LoadFromFile(fullPath);
+
+            if (ab != null)
+            {
+                var allNames = ab.GetAllAssetNames();
+                var matchedNames = new List<string>();
+                foreach (var n in allNames)
+                {
+                    string baseName = System.IO.Path.GetFileNameWithoutExtension(n);
+                    if (baseName.StartsWith(head))
+                    {
+                        string rest = baseName.Substring(head.Length);
+                        if (!rest.Contains("_")) // skip layer variants
+                            matchedNames.Add(n);
+                    }
+                }
+                matchedNames.Sort();
+                foreach (var n in matchedNames)
+                {
+                    var s = ab.LoadAsset<Sprite>(n);
+                    if (s != null) frameList.Add(s);
+                }
+                if (frameList.Count > 0)
+                    return frameList.ToArray();
+            }
+        }
+
+        // Also try character_stand atlas (some stand frames may be there)
+        bundlePath = "ui/atlas/character_stand/res_a_1";
+        fullPath = KTO.Resource.ResourceDef.GetResourceFullPath(bundlePath, false);
+        if (!string.IsNullOrEmpty(fullPath))
+        {
+            var ab = KTO.Resource.BundleManager.GetBundle(bundlePath);
+            if (ab == null)
+                ab = UnityEngine.AssetBundle.LoadFromFile(fullPath);
+
+            if (ab != null)
+            {
+                var allNames = ab.GetAllAssetNames();
+                var matchedNames = new List<string>();
+                foreach (var n in allNames)
+                {
+                    string baseName = System.IO.Path.GetFileNameWithoutExtension(n);
+                    if (baseName.StartsWith(head))
+                    {
+                        string rest = baseName.Substring(head.Length);
+                        if (!rest.Contains("_"))
+                            matchedNames.Add(n);
+                    }
+                }
+                matchedNames.Sort();
+                foreach (var n in matchedNames)
+                {
+                    var s = ab.LoadAsset<Sprite>(n);
+                    if (s != null) frameList.Add(s);
+                }
+                if (frameList.Count > 0)
+                    return frameList.ToArray();
+            }
+        }
+
+#if UNITY_EDITOR
+        // Editor fallback: AssetDatabase search (for development before bundles are built)
+        var guids = AssetDatabase.FindAssets($"t:Sprite {prefix}_stand");
+        var byFrame = new Dictionary<string, string>();
         foreach (var g in guids)
         {
             var path = AssetDatabase.GUIDToAssetPath(g);
             var fileName = System.IO.Path.GetFileNameWithoutExtension(path);
             if (!fileName.StartsWith(head)) continue;
             var rest = fileName.Substring(head.Length);
-            if (rest.Contains("_")) continue; // _1/_2/_3 layer variants — skip
-            // Prefer Assets/Sprite/loginbg copies (already imported as Sprite); fall back otherwise.
+            if (rest.Contains("_")) continue;
             if (!byFrame.TryGetValue(fileName, out var existing) || path.Contains("/Sprite/loginbg/"))
                 byFrame[fileName] = path;
         }
         var keys = new List<string>(byFrame.Keys);
-        keys.Sort(); // padded numbers → lexical sort == numeric sort
+        keys.Sort();
         var arr = new Sprite[keys.Count];
         for (int i = 0; i < keys.Count; i++) arr[i] = AssetDatabase.LoadAssetAtPath<Sprite>(byFrame[keys[i]]);
         return arr;

@@ -1,6 +1,8 @@
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
+// Alias to avoid collision with Assembly-CSharp empty stubs (global namespace)
+using KResourceModule = KTO.Resource.ResourceModule;
 
 namespace KTO.Game
 {
@@ -79,12 +81,21 @@ namespace KTO.Game
             if (_dialogRoot != null) return;
 
             // Load the imported prefab
-            // Source: UINpcDialog prefab built from res_p_151.ab via ONE-SHOT PIPELINE
-            var prefab = Resources.Load<GameObject>(PREFAB_PATH);
+            // Phase R3: Try bundle first, fallback to Resources/AssetDatabase
+            // Source: ui/views/uinpcdialog bundle (matches BundleBuildPipeline.AssignPrefabBundleNames)
+            // Original: Lua Ui:CreateWindow("UINpcDialog") → ResourceModule loads from ui/views/ bundle
+            GameObject prefab = KResourceModule.LoadSync<GameObject>("ui/views/uinpcdialog", "UINpcDialog");
+
             if (prefab == null)
             {
-                // Try direct instantiation from AssetDatabase in editor
+                // Fallback: Resources.Load (for legacy path)
+                prefab = Resources.Load<GameObject>(PREFAB_PATH);
+            }
+
+            if (prefab == null)
+            {
 #if UNITY_EDITOR
+                // Editor fallback: AssetDatabase direct load
                 prefab = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>(
                     "Assets/Prefabs/Imported/UINpcDialog.prefab");
 #endif

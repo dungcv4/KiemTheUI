@@ -70,17 +70,29 @@ public class SelectRoleRuntimeBridge : MonoBehaviour
 
     void TranslateUI()
     {
-        // Translate Chinese texts to Vietnamese (bundle has original Chinese)
+        // Route every Text through KTO.Localization.LanguageModule so the
+        // whole screen participates in the same localization pipeline used
+        // by the HUD (see Assets/Scripts/Localization/LanguageModule.cs).
+        //
+        // This replaces an earlier ad-hoc switch that hardcoded 5 CN→VN
+        // mappings. The new flow matches the original KTO game:
+        //   Lua:  i18n.Get(key)  →  LanguageModule.Get(key)
+        //   C#:   LanguageModule.Get(key)  (identical call)
+        // Keys are the original Chinese strings themselves, consistent with
+        // how translations_vi-VN.json is authored.
         foreach (var txt in GetComponentsInChildren<Text>(true))
         {
-            switch (txt.text)
-            {
-                case "进入游戏": txt.text = "Vào Giang Hồ"; break;
-                case "创建角色": txt.text = "Tạo Nhân Vật"; break;
-                case "删除角色": txt.text = "Xóa Nhân Vật"; break;
-                case "返回": txt.text = "Quay Lại"; break;
-                case "当前角色": txt.text = "Nhân vật"; break;
-            }
+            if (string.IsNullOrEmpty(txt.text)) continue;
+            // Only translate if the string contains non-ASCII (either CN or VN
+            // diacritics). Pure ASCII values like "123" / "" / "..." are
+            // runtime data that shouldn't pass through LanguageModule.
+            bool hasNonAscii = false;
+            foreach (char c in txt.text) { if (c > 0x7F) { hasNonAscii = true; break; } }
+            if (!hasNonAscii) continue;
+
+            string translated = KTO.Localization.LanguageModule.Get(txt.text);
+            if (!string.IsNullOrEmpty(translated) && translated != txt.text)
+                txt.text = translated;
         }
 
         // Hide VFX ring effects from UILoginBG (matches Lua OnCreate: all VFX inactive)
@@ -342,12 +354,19 @@ public class SelectRoleRuntimeBridge : MonoBehaviour
             return;
         }
 
-        // Load avatar prefab
-        GameObject prefab = null;
-        #if UNITY_EDITOR
-        string path = $"Assets/game/ui/loginbg/{avatarName}.prefab";
-        prefab = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>(path);
-        #endif
+        // Load avatar prefab from bundle or editor fallback
+        // Source: Original loads from ui/loginbg bundle via LoaderManager
+        string bundlePath = $"ui/views/{avatarName.ToLower()}";
+        GameObject prefab = KTO.Resource.ResourceModule.LoadPrefabSync(bundlePath, avatarName);
+
+        if (prefab == null)
+        {
+            // Try legacy path
+#if UNITY_EDITOR
+            string editorPath = $"Assets/game/ui/loginbg/{avatarName}.prefab";
+            prefab = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>(editorPath);
+#endif
+        }
 
         if (prefab == null)
         {
@@ -421,12 +440,23 @@ public class SelectRoleRuntimeBridge : MonoBehaviour
     {
         if (!FACTION_ICON.TryGetValue(factionID, out string spriteName)) return;
 
-        #if UNITY_EDITOR
-        string path = $"Assets/Sprite/faction_icon/{spriteName}.png";
-        var sprite = UnityEditor.AssetDatabase.LoadAssetAtPath<Sprite>(path);
+        // Load from atlas bundle: ui/atlas/faction_icon/res_a_1
+        // Source: Original Lua calls pPanel:Sprite_SetSprite("imgFactionIcon", Faction:GetIcon())
+        // which resolves via LoaderManager → BundleManager → atlas bundle
+        var sprite = KTO.Resource.ResourceModule.LoadSpriteByName(spriteName);
         if (sprite != null)
+        {
             img.sprite = sprite;
-        #endif
+            return;
+        }
+
+#if UNITY_EDITOR
+        // Editor fallback for sprites not yet in bundles
+        string path = $"Assets/Sprite/faction_icon/{spriteName}.png";
+        var editorSprite = UnityEditor.AssetDatabase.LoadAssetAtPath<Sprite>(path);
+        if (editorSprite != null)
+            img.sprite = editorSprite;
+#endif
     }
 
     // ── Button handlers ──

@@ -1050,82 +1050,45 @@ public static class LuaGameStubs
         script.Globals["IsAlone"] = DynValue.NewCallback((ctx, args) => DynValue.NewNumber(0));
         script.Globals["SetRideState"] = DynValue.NewCallback((ctx, args) => DynValue.Nil);
 
-        // === i18n (Vietnamese) ===
+        // === i18n ===
+        //
+        // Faithful port of KTO's Lua i18n module — see
+        // `Script/i18n/i18n.lua` (extracted from pack0.dat) and
+        // `KTO_DecompiledReference/_root/LanguageModule.c`.
+        //
+        // Original flow:
+        //   i18n.Get(key)      → LanguageModule.Get(key, null)
+        //   i18n.EasyGet(key)  → LanguageModule.Get(key, null)  (alias in Lua)
+        //   i18n.Parse(msg)    → LanguageModule.Parse(msg)  (replaces <i18n=KEY>)
+        //
+        // We route all three XLua bindings to our C# LanguageModule so the
+        // Lua side and the HUD Localize components share ONE dictionary
+        // (Resources/language/translations_vi-VN.json). Previously this file
+        // hosted its own hardcoded Dictionary<string,string> — the 40+ entries
+        // were merged into the JSON so there's one source of truth.
         var i18n = new Table(script);
-        i18n["szOk"] = "Đồng ý";
-        i18n["szCancel"] = "Hủy";
+        i18n["szOk"]     = KTO.Localization.LanguageModule.Get("Ok");
+        i18n["szCancel"] = KTO.Localization.LanguageModule.Get("Cancel");
 
-        // Vietnamese translation dictionary
-        var viDict = new Dictionary<string, string> {
-            // Common HUD texts
-            {"跨服中无法进行当前操作", "Không thể thực hiện trong liên server"},
-            {"安全区内不能使用该技能", "Không thể sử dụng kỹ năng trong vùng an toàn"},
-            {"当前未拥有该技能", "Chưa sở hữu kỹ năng này"},
-            {"技能等级为0 ，不能使用", "Kỹ năng cấp 0, không sử dụng được"},
-            {"自动战斗中", "Đang tự động chiến đấu"},
-            {"前往安全区", "Đi đến vùng an toàn"},
-            {"补给药品中", "Đang bổ sung thuốc"},
-            {"跟战中", "Đang theo chiến đấu"},
-            {"本地图无法买药", "Không thể mua thuốc ở bản đồ này"},
-            {"确定", "Xác nhận"},
-            {"取消", "Hủy"},
-            {"等级", "Cấp độ"},
-            {"战斗力", "Lực chiến"},
-            {"经验", "Kinh nghiệm"},
-            {"生命", "Sinh mệnh"},
-            {"内力", "Nội lực"},
-            {"帮会", "Bang hội"},
-            {"门派", "Môn phái"},
-            {"组队", "Tổ đội"},
-            {"好友", "Bạn bè"},
-            {"聊天", "Trò chuyện"},
-            {"邮件", "Thư"},
-            {"背包", "Túi đồ"},
-            {"任务", "Nhiệm vụ"},
-            {"活动", "Hoạt động"},
-            {"商城", "Thương thành"},
-            {"世界", "Thế giới"},
-            {"系统", "Hệ thống"},
-            {"私聊", "Riêng tư"},
-            {"队伍", "Đội ngũ"},
-            {"附近", "Lân cận"},
-            {"帮", "Bang"},
-            {"宗", "Tông"},
-            {"阵营", "Trận doanh"},
-            {"招募", "Chiêu mộ"},
-            {"叫卖", "Rao bán"},
-            {"地图", "Bản đồ"},
-            {"频道", "Kênh"},
-            {"坐骑", "Tọa kỵ"},
-            {"宠物", "Thú cưng"},
-            {"技能", "Kỹ năng"},
-            {"装备", "Trang bị"},
-        };
-
-        // EasyGet — decode Chinese UTF-8 → Vietnamese
         i18n["EasyGet"] = DynValue.NewCallback((ctx, args) => {
-            if (args.Count == 0) return DynValue.NewString("?");
+            if (args.Count == 0) return DynValue.NewString("");
             string raw = args[0].CastToString();
-            if (string.IsNullOrEmpty(raw)) return DynValue.NewString("");
-            // Try Vietnamese translation
-            if (viDict.TryGetValue(raw, out var vi)) return DynValue.NewString(vi);
-            return DynValue.NewString(raw);
+            return DynValue.NewString(KTO.Localization.LanguageModule.Get(raw));
         });
 
-        // Get — return Vietnamese or passthrough
         i18n["Get"] = DynValue.NewCallback((c, a) => {
-            if (a.Count == 0) return DynValue.NewString("?");
+            if (a.Count == 0) return DynValue.NewString("");
             string raw = a[0].CastToString();
-            if (viDict.TryGetValue(raw, out var vi)) return DynValue.NewString(vi);
-            return a[0];
+            return DynValue.NewString(KTO.Localization.LanguageModule.Get(raw));
         });
 
-        // Parse — return Vietnamese or passthrough
+        // i18n.Parse — replaces <i18n=KEY> tokens. For now, also route
+        // whole-string through Get so common cases work even without the
+        // token parser (matches the previous behavior).
         i18n["Parse"] = DynValue.NewCallback((c, a) => {
-            if (a.Count == 0) return DynValue.NewString("?");
+            if (a.Count == 0) return DynValue.NewString("");
             string raw = a[0].CastToString();
-            if (viDict.TryGetValue(raw, out var vi)) return DynValue.NewString(vi);
-            return a[0];
+            return DynValue.NewString(KTO.Localization.LanguageModule.Get(raw));
         });
 
         script.Globals["i18n"] = i18n;

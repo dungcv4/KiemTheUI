@@ -4,6 +4,9 @@ using UnityEngine.UI;
 using UnityEditor;
 #endif
 
+// Alias to avoid collision with Assembly-CSharp empty stubs (global namespace)
+using KResourceModule = KTO.Resource.ResourceModule;
+
 namespace KTO.Game
 {
     // =======================================================================
@@ -340,18 +343,24 @@ namespace KTO.Game
         {
             if (_cachedFont != null) return _cachedFont;
 
+            // Phase R3: Try loading from font bundle first
+            // Source: font/res_f_1 bundle (matches BundleBuildPipeline.AssignFontBundleNames)
+            // Original: ResourceModule loads font from font/ bundle
+            _cachedFont = KResourceModule.LoadSync<Font>("font/res_f_1", "common_vi");
+            if (_cachedFont != null) return _cachedFont;
+
 #if UNITY_EDITOR
-            // Editor: load from Assets/Font/common_vi.ttf directly
+            // Editor fallback: load from Assets/Font/ directly
             // Source: ONE-SHOT PIPELINE font mapping — common_zh → common_vi
             _cachedFont = AssetDatabase.LoadAssetAtPath<Font>("Assets/Font/common_vi.ttf");
             if (_cachedFont != null) return _cachedFont;
 #endif
 
-            // Runtime: try Resources path
+            // Runtime fallback: try Resources path
             _cachedFont = Resources.Load<Font>("Fonts/common_vi");
             if (_cachedFont != null) return _cachedFont;
 
-            // Fall back to Unity built-in
+            // Last resort: Unity built-in
             _cachedFont = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
 
             return _cachedFont;
