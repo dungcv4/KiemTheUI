@@ -41,27 +41,54 @@ namespace KTO.Resource
         /// <summary>
         /// Try all known atlas bundles for a sprite name.
         /// Returns the loaded Sprite or null.
+        ///
+        /// When the incoming name (from XML Icon="…") doesn't match exactly,
+        /// we try a few common naming variants the KTO atlas build pipeline
+        /// produces:
+        ///   - exact name
+        ///   - name + "_0"          (atlas-packing variant suffix)
+        ///   - name without trailing "_s"
+        ///   - (name without "_s") + "_0"
+        ///
+        /// This mirrors the original game's loader — same atlas→sprite-by-name
+        /// lookup — with the known XML↔bundle naming drift accommodated so
+        /// more than just 28/1544 XML icon names resolve.
         /// </summary>
         public static Sprite LoadSpriteByName(string spriteName)
         {
-            // 1. Try the pre-built map first
-            string bundlePath = GetBundlePath(spriteName);
-            if (bundlePath != null)
-            {
-                var s = ResourceModule.LoadSync<Sprite>(bundlePath, spriteName);
-                if (s != null) return s;
-            }
+            if (string.IsNullOrEmpty(spriteName)) return null;
+            EnsureLoaded();
 
-            // 2. Fallback: brute-force search across known atlas bundles
-            foreach (var atlas in _knownAtlases)
+            // Variant candidates in preference order
+            var candidates = new[] {
+                spriteName,
+                spriteName + "_0",
+                spriteName.EndsWith("_s") ? spriteName.Substring(0, spriteName.Length - 2) : null,
+                spriteName.EndsWith("_s") ? spriteName.Substring(0, spriteName.Length - 2) + "_0" : null,
+            };
+
+            foreach (var cand in candidates)
             {
-                var s = ResourceModule.LoadSync<Sprite>(atlas, spriteName);
-                if (s != null)
+                if (string.IsNullOrEmpty(cand)) continue;
+
+                // 1. Pre-built map
+                string bundlePath = GetBundlePath(cand);
+                if (bundlePath != null)
                 {
-                    // Cache for next time
-                    if (_map == null) _map = new Dictionary<string, string>();
-                    _map[spriteName] = atlas;
-                    return s;
+                    var s = ResourceModule.LoadSync<Sprite>(bundlePath, cand);
+                    if (s != null) return s;
+                }
+
+                // 2. Brute-force known atlases (caches on hit)
+                foreach (var atlas in _knownAtlases)
+                {
+                    var s = ResourceModule.LoadSync<Sprite>(atlas, cand);
+                    if (s != null)
+                    {
+                        if (_map == null) _map = new Dictionary<string, string>();
+                        _map[cand] = atlas;
+                        return s;
+                    }
                 }
             }
 
@@ -87,6 +114,9 @@ namespace KTO.Resource
             "ui/atlas/chat/res_a_1",
             "ui/atlas/activity/res_a_1",
             "ui/atlas/welfare/res_a_1",
+            // Item icons — 2,470 sprites extracted from
+            // KTO_Resources/assets/Bundles/Android/ui/icon/item/res_a_1..7.ab
+            "ui/atlas/item/res_a_1",
         };
 
         static void EnsureLoaded()

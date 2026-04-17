@@ -265,9 +265,26 @@ namespace KTO.Resource
                 Debug.Log($"[ResourceModule] Editor sprite cache: {_editorSpriteCache.Count} sprites");
             }
 
-            Sprite result;
-            _editorSpriteCache.TryGetValue(name, out result);
-            return result;
+            // Try name variants — bundle atlases often append "_0" (atlas
+            // packing variant index) OR the XML lost the trailing "_s"
+            // during Vietnamese re-packaging. Same set as
+            // SpriteAtlasMap.LoadSpriteByName so editor + runtime behave
+            // identically.
+            string stripS = (name != null && name.EndsWith("_s"))
+                            ? name.Substring(0, name.Length - 2) : null;
+            string[] candidates = {
+                name,
+                name + "_0",
+                stripS,
+                stripS != null ? stripS + "_0" : null,
+            };
+            foreach (var cand in candidates)
+            {
+                if (string.IsNullOrEmpty(cand)) continue;
+                if (_editorSpriteCache.TryGetValue(cand, out Sprite s))
+                    return s;
+            }
+            return null;
         }
 #endif
 
