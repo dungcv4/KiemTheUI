@@ -68,6 +68,16 @@ namespace KTO.Localization
 
             if (string.IsNullOrEmpty(Term)) return;
 
+            // "dynamic_change_from_script" is a designer placeholder marker
+            // from the original Chinese build — it means "this text is
+            // populated by Lua at runtime". We treat it as a no-op so that
+            // C# code that sets the Text (via SetText, Label_SetText ports,
+            // etc.) isn't overwritten by Localize clearing it back to "".
+            //
+            // Without this, a Text like txtFightPower shows the computed
+            // fight power briefly, then Localize.OnEnable fires and blanks it.
+            if (Term == "dynamic_change_from_script") return;
+
             // Split behavior based on whether the term is in the translation
             // table:
             //

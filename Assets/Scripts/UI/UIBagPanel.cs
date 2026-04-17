@@ -106,17 +106,75 @@ namespace KTO.UI
             WireButton(P_BtnWarehouse, () => Debug.Log("[UIBagPanel] btnWarehouse: opens UIWarehouse (not yet ported)"));
             WireButton(P_BtnBatchSell, () => UIItemBatchSell.Open((int)_currentFilter));
 
-            // Resolve row template + grid content.
-            // ItemCell is the ROW template (holds Item1..Item5 as children).
-            // Leave it ACTIVE — its 5 built-in cells are the first row of
-            // the grid; EnsureCellPool adopts them and clones 7 more rows.
-            var tmpl = _panel.Find(P_ItemCellTemplate);
-            if (tmpl != null)
+            // Resolve cell template + grid container.
+            //
+            // Layout per DetailJSON inspection:
+            //   BIContent                 — ScrollRect Content
+            //     └── ItemCell            — GridLayoutGroup container (the ACTUAL grid)
+            //           ├── Item1..Item5  — 5 individual cell prefabs
+            //
+            // So `ItemCell` is the CONTAINER, and Item1 is the cell template.
+            // We keep Item1 as the single prototype and clone it into
+            // ItemCell to reach 40 cells. Items 2-5 become the first 4
+            // clones (re-used). GridLayoutGroup auto-arranges them.
+            var itemCell = _panel.Find(P_ItemCellTemplate);
+            if (itemCell != null)
             {
-                _cellTemplate = tmpl.gameObject;
-                _gridContent = tmpl.parent;
-                // Do NOT SetActive(false) — we need the original row visible
-                // so its cells participate in the grid.
+                _gridContent = itemCell;                     // container
+                var item1 = itemCell.Find("Item1");
+                if (item1 != null)
+                    _cellTemplate = item1.gameObject;         // single cell prototype
+
+                // Configure the GridLayoutGroup to give us a 5-column grid
+                // (original Lua LoopScrollView used nRow=5 meaning 5 columns).
+                var grid = itemCell.GetComponent<GridLayoutGroup>();
+                if (grid != null)
+                {
+                    grid.cellSize    = new Vector2(78, 78);
+                    grid.spacing     = new Vector2(4, 4);
+                    grid.constraint  = GridLayoutGroup.Constraint.FixedColumnCount;
+                    grid.constraintCount = 5;
+                    grid.startCorner = GridLayoutGroup.Corner.UpperLeft;
+                    grid.startAxis   = GridLayoutGroup.Axis.Horizontal;
+                    grid.childAlignment = TextAnchor.UpperLeft;
+                }
+
+                // The original prefab ships ItemCell at 80×80 (matches a
+                // single cell) — the Lua LoopScrollView resizes it at runtime.
+                // Our non-virtualized grid needs ItemCell sized to fit all
+                // 40 cells: 5 cols × 78 + 4×4 spacing ≈ 406 wide,
+                //           8 rows × 78 + 7×4 spacing ≈ 652 tall.
+                // Clamp to the viewport width so the scrollable area stays
+                // within bounds.
+                var rt = itemCell as RectTransform;
+                if (rt != null)
+                {
+                    const int cols = 5, rows = 8;
+                    const float cell = 78f, sp = 4f;
+                    float gridW = cols * cell + (cols - 1) * sp;   // 406
+                    float gridH = rows * cell + (rows - 1) * sp;   // 652
+                    rt.pivot     = new Vector2(0f, 1f);
+                    rt.anchorMin = new Vector2(0f, 1f);
+                    rt.anchorMax = new Vector2(0f, 1f);
+                    rt.anchoredPosition = new Vector2(0f, 0f);
+                    rt.sizeDelta = new Vector2(gridW, gridH);
+                }
+
+                // BIContent (ScrollRect Content): normalize pivot/anchors to
+                // top-left so ItemCell's anchoredPos (0,0) matches the
+                // viewport's top-left, not a centered pivot.
+                // Without this the 406-wide grid renders at x=-424 relative
+                // to a 439-wide viewport and ~2 columns get clipped off the
+                // left edge (saw 3 cols visible instead of 5).
+                var contentRt = itemCell.parent as RectTransform;   // BIContent
+                if (contentRt != null)
+                {
+                    contentRt.pivot     = new Vector2(0f, 1f);
+                    contentRt.anchorMin = new Vector2(0f, 1f);
+                    contentRt.anchorMax = new Vector2(0f, 1f);
+                    contentRt.anchoredPosition = Vector2.zero;
+                    contentRt.sizeDelta = new Vector2(410f, 660f);
+                }
             }
 
             // ── Equip slot labels (left paperdoll) ────────────────────
@@ -334,6 +392,33 @@ namespace KTO.UI
                 if (tr != null && !tr.gameObject.activeSelf)
                     tr.gameObject.SetActive(true);
             }
+
+            // Hide the UIItemGrid sibling on each slot so the "empty slot"
+            // label is visible. Original Lua: each slot has a `Text` (the
+            // Vietnamese name) AND a `UIItemGrid` (the item icon); only one
+            // is active at a time — UIItemGrid when equipped, Text when empty.
+            // No equipment is synced yet, so every slot is empty → hide grids.
+            string[] slotParents = {
+                $"{root}/grid1/Helm",  $"{root}/grid1/Cuff",
+                $"{root}/grid1/Armor", $"{root}/grid1/Belt",
+                $"{root}/grid1/Boots", $"{root}/grid2/Weapon",
+                $"{root}/grid2/Necklace", $"{root}/grid2/Ring",
+                $"{root}/grid2/Pendant",  $"{root}/grid2/Amulet",
+                $"{root}/grid3/Wuxingyin", $"{root}/grid3/Guanyin",
+                $"{root}/grid3/Mantle",
+            };
+            foreach (var sp in slotParents)
+            {
+                var tr = _panel.Find(sp);
+                if (tr == null) continue;
+                var grid = tr.Find("UIItemGrid");
+                if (grid != null)
+                    grid.gameObject.SetActive(false);
+                // txtJingZhuLv (enhance +N badge) also hides on empty slots.
+                var lv = tr.Find("txtJingZhuLv");
+                if (lv != null)
+                    lv.gameObject.SetActive(false);
+            }
         }
 
         // ----- filter tab handling -----
@@ -422,49 +507,45 @@ namespace KTO.UI
 
         // ----- cell pool -----
         //
-        // The imported prefab has:
-        //   bagItemSV/BIViewport/BIContent/ItemCell                ← the ROW template
-        //   bagItemSV/BIViewport/BIContent/ItemCell/Item1..Item5   ← 5 cells per row
+        // Prefab layout (verified via DetailJSON):
+        //   BIContent/ItemCell  — GridLayoutGroup container (the grid)
+        //     ├── Item1..Item5  — 5 cell prefabs, originally the first row
+        //                         of the Lua LoopScrollView
         //
-        // Original Lua uses 5 columns × 8 rows = 40 slots per bag (LoopScrollView).
-        // So we clone the ROW 8 times (= ceil(40/5)) and flatten to 40 cells,
-        // matching the layout in the user's reference screenshot.
+        // The original Lua uses LoopScrollView (5 virtual cells recycled on
+        // scroll). We go simpler: materialize all 40 cells and let the
+        // GridLayoutGroup (configured 5-column) arrange them — matches the
+        // full 5×8 grid in the user's reference screenshot.
+        //
+        // First call: adopt Item1..Item5 that shipped in the prefab as the
+        // first 5 pool entries, then clone Item1 (35 more times) to reach 40.
         void EnsureCellPool(int wantedCount)
         {
             if (_cellTemplate == null || _gridContent == null) return;
 
-            const int cellsPerRow = 5;
-
-            // Include the ORIGINAL row (Item1..Item5) in our pool so we don't
-            // waste the 5 cells that shipped with the prefab. Re-activate it
-            // since Init() hid the template.
+            // Step 1: adopt the 5 shipped prototypes on first call.
             if (_cells.Count == 0)
             {
-                _cellTemplate.SetActive(true);
-                _cellTemplate.name = "ItemCell";  // original template row
-                for (int col = 1; col <= cellsPerRow; col++)
+                for (int i = 1; i <= 5; i++)
                 {
-                    var slot = _cellTemplate.transform.Find($"Item{col}");
+                    var slot = _gridContent.Find($"Item{i}");
                     if (slot == null) continue;
-                    _cells.Add(new ItemCell(slot.gameObject));
-                }
-            }
-
-            // Clone additional ROWS to satisfy wantedCount (8 rows for 40 slots).
-            while (_cells.Count < wantedCount)
-            {
-                var row = Instantiate(_cellTemplate, _gridContent);
-                row.SetActive(true);
-                int rowIndex = _cells.Count / cellsPerRow;
-                row.name = $"ItemCell_{rowIndex}";
-                for (int col = 1; col <= cellsPerRow; col++)
-                {
-                    var slot = row.transform.Find($"Item{col}");
-                    if (slot == null) continue;
+                    slot.gameObject.SetActive(true);
                     var cell = new ItemCell(slot.gameObject);
                     _cells.Add(cell);
                     cell.SetEmpty();
                 }
+            }
+
+            // Step 2: clone Item1 into the grid container up to wantedCount.
+            while (_cells.Count < wantedCount)
+            {
+                var go = Instantiate(_cellTemplate, _gridContent);
+                go.SetActive(true);
+                go.name = $"ItemCell_{_cells.Count}";
+                var cell = new ItemCell(go);
+                _cells.Add(cell);
+                cell.SetEmpty();
             }
         }
 
