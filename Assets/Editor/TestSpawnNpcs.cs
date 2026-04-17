@@ -72,6 +72,8 @@ public static class TestSpawnNpcs
             if (npc != null)
             {
                 npc.name = $"Npc_{t.id}_{t.resName}";
+                npc.m_szName = t.name;  // Phase 10: store display name for head label
+                npc.RefreshHeadLabel(); // Phase 10: update head label after name set
                 npc.ChangeLogicDir(t.dir * 32); // Direction enum → logic dir
                 spawned++;
             }

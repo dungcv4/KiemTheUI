@@ -43,6 +43,15 @@ namespace KTO.Game
                 handlerGo.AddComponent<NpcNetworkHandler>();
             }
 
+            // Phase 11: Initialize NPC dialog UI
+            // Source: Lua Ui:CreateWindow("UINpcDialog") — singleton created on game start
+            if (NpcDialogUI.Instance == null)
+            {
+                var dialogGo = new GameObject("[NpcDialogUI]");
+                dialogGo.AddComponent<NpcDialogUI>();
+            }
+            NpcDialogUI.Instance.Init();
+
             yield return UIMgr.Instance.LoadHudAsync();
             yield return SceneLoadManager.Instance.LoadMapAsync(InitialMapCode);
 

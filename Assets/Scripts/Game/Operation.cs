@@ -332,16 +332,31 @@ namespace KTO.Game
             //   local nDialogDistance = GetNpcDialogDistance(pNpc.nTemplateId)
             //
             // Phase 9.2: compute distance in logic units between player and NPC.
-            Npc player = NpcManager.GetPlayer();
-            if (player == null)
+            // Note: Player may be either an NpcManager entity (bIsMe=true) or
+            //       a standalone PlayerAssembler. Try NpcManager first, then
+            //       fall back to finding the player GameObject by tag/name.
+            Vector3 playerWorldPos;
+            Npc playerNpc = NpcManager.GetPlayer();
+            if (playerNpc != null)
             {
-                Debug.LogWarning("[Operation] OnDialogerClicked: no player NPC");
-                return;
+                playerWorldPos = playerNpc.m_vePos;
+            }
+            else
+            {
+                // Fallback: find player GameObject directly
+                var playerGo = GameObject.FindGameObjectWithTag("Player");
+                if (playerGo == null) playerGo = GameObject.Find("Player_ma_000a_free");
+                if (playerGo == null)
+                {
+                    Debug.LogWarning("[Operation] OnDialogerClicked: no player found");
+                    return;
+                }
+                playerWorldPos = playerGo.transform.position;
             }
 
             // Source: Npc.GetDistance returns logic-space distance
-            int playerLogicX = Env.World2Logic(player.m_vePos.x);
-            int playerLogicY = Env.World2Logic(player.m_vePos.y);
+            int playerLogicX = Env.World2Logic(playerWorldPos.x);
+            int playerLogicY = Env.World2Logic(playerWorldPos.y);
             int npcLogicX    = Env.World2Logic(npc.m_vePos.x);
             int npcLogicY    = Env.World2Logic(npc.m_vePos.y);
 
@@ -399,7 +414,20 @@ namespace KTO.Game
             //   The server processes the click via CMD_KT_CLICKON_NPC (50004)
             //   and responds with CMD_KT_G2C_NPCDIALOG (50005) if applicable.
             NpcNetworkHandler.SendClickNpc(nNpcID);
-            Debug.Log($"[Operation] OnDialogerClicked: NPC {nNpcID} in range — sent click to server");
+
+            // Phase 11: Open dialog UI
+            // In the full flow, the server responds with dialog content via
+            // CMD_KT_G2C_NPCDIALOG → NpcNetworkHandler → NpcDialogUI.ShowDialog.
+            // Without a server, show a mock dialog immediately.
+            // Source: Dialog.lua:CommonShow → CallClientScript("Ui:UpdateDialog", ...)
+            if (NpcDialogUI.Instance != null)
+            {
+                var mockData = NpcDialogUI.CreateMockDialog(npc);
+                if (mockData != null)
+                    NpcDialogUI.Instance.ShowDialog(mockData);
+            }
+
+            Debug.Log($"[Operation] OnDialogerClicked: NPC {nNpcID} in range — dialog opened");
         }
     }
 }

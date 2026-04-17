@@ -121,6 +121,12 @@ namespace KTO.Network
                 // calls in the original (SetNpcRepName, etc.)
                 npc.name = $"Npc_{npcId}_{resName}";
 
+                // Phase 10: Store display name + title for head label
+                // Source: RepresentEvent.c → Npc.m_szName / m_szTitle
+                npc.m_szName  = npcName;
+                npc.m_szTitle = npcTitle;
+                npc.RefreshHeadLabel();
+
                 // Set initial direction from server
                 // Source: Npc.c:ChangeLogicDir — dir is 0-7 Direction enum,
                 // but ChangeLogicDir expects 0-255 logic dir.

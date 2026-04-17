@@ -89,6 +89,24 @@ namespace KTO.Game
         public bool _NeedUpdateAnimation;          // 0x170
 
         // -------------------------------------------------------------------
+        //  Display data (name, title)
+        //
+        //  Source: Npc.cs:0x30 m_szName, 0x38 m_szTitle (DecompiledSource)
+        //  Set by: NpcNetworkHandler.OnRecvNewNpc (server) or
+        //          TestSpawnNpcs (editor test data)
+        //
+        //  In the original, these feed into UESHead._Name.text and
+        //  UESHead._Title.text respectively, managed by
+        //  UESNpcHeadTextSet.Attach (RepresentModule).
+        // -------------------------------------------------------------------
+
+        /// <summary>NPC display name (Vietnamese). Set by server or test data.</summary>
+        public string m_szName;                        // 0x30
+
+        /// <summary>NPC title text (guild name, rank, etc.).</summary>
+        public string m_szTitle;                       // 0x38
+
+        // -------------------------------------------------------------------
         //  Represent mask (bit flags controlling visual parts)
         // -------------------------------------------------------------------
         /// <summary>
@@ -125,6 +143,14 @@ namespace KTO.Game
 
         /// <summary>BoxCollider2D for click detection (Physics2D.Raycast).</summary>
         BoxCollider2D _boxCollider;
+
+        /// <summary>Head label (name + title above sprite). Phase 10.</summary>
+        /// <remarks>
+        /// Source: UESHead (offset 0x40 _Name, 0x48 _NameOutline, 0x38 _Title)
+        ///         Attached via UESNpcHeadTextSet.Attach in original.
+        ///         Phase 10: attached directly as child world-space Canvas.
+        /// </remarks>
+        NpcHeadLabel _headLabel;
 
         // ===================================================================
         //  InitData — Npc.c:38-309
@@ -319,6 +345,33 @@ namespace KTO.Game
 
             bRepresent = true;
             _NeedUpdateAnimation = false;
+
+            // --- Phase 10: Attach head label (name + title above sprite) ---
+            // Source: Npc.c:Active (2250-2268) → after represent creation,
+            //         RepresentEvent.c calls UESNpcHeadTextSet.Attach(nKind, isMe, npcSlot)
+            //         then UESHead.SetName / SetTitle / SetNameColor
+            // Phase 10: simplified to NpcHeadLabel.Attach (world-space Canvas child)
+            _headLabel = NpcHeadLabel.Attach(this);
+        }
+
+        // ===================================================================
+        //  RefreshHeadLabel — Update head label text after name/title change
+        //
+        //  In the original, name and title are set via separate RepresentEvent
+        //  calls (SetNpcRepName, SetNpcRepTitle) which call UESHead.SetName /
+        //  UESHead.SetTitle on the already-attached UESHead instance.
+        //  Source: RepresentEvent.c → UESHead.SetName / SetTitle
+        //
+        //  Phase 10: called after m_szName / m_szTitle are set on the Npc,
+        //  which happens after NpcManager.CreateNpc returns (by the caller:
+        //  NpcNetworkHandler.OnRecvNewNpc or TestSpawnNpcs).
+        // ===================================================================
+        public void RefreshHeadLabel()
+        {
+            if (_headLabel == null) return;
+            _headLabel.SetName(m_szName);
+            _headLabel.SetTitle(m_szTitle);
+            _headLabel.SetNameColor(m_nKind, m_bIsMe);
         }
 
         // ===================================================================
@@ -363,6 +416,15 @@ namespace KTO.Game
                 _assembler = null;
             }
 
+            // Phase 10: Detach head label
+            // Source: RepresentEvent.c → UESNpcHeadTextSet.Detach(nKind, isMe, npcSlot)
+            //         UESHeadTextContrl.Detach → CollectHandler → OnRecycle + pool return
+            if (_headLabel != null)
+            {
+                _headLabel.OnRecycle();
+                _headLabel = null;
+            }
+
             // Source: Npc.c:1000-1048 — zero out fields
             m_nNpcID         = 0;
             m_nNpcResID      = 0;
@@ -381,6 +443,8 @@ namespace KTO.Game
             m_vePos          = Vector3.zero;
             m_Transform      = null;
             m_Object         = null;
+            m_szName         = null;
+            m_szTitle        = null;
         }
 
         // ===================================================================
