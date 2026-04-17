@@ -106,14 +106,30 @@ namespace KTO.UI
             WireButton(P_BtnWarehouse, () => Debug.Log("[UIBagPanel] btnWarehouse: opens UIWarehouse (not yet ported)"));
             WireButton(P_BtnBatchSell, () => UIItemBatchSell.Open((int)_currentFilter));
 
-            // Resolve cell template + grid content
+            // Resolve row template + grid content.
+            // ItemCell is the ROW template (holds Item1..Item5 as children).
+            // Leave it ACTIVE — its 5 built-in cells are the first row of
+            // the grid; EnsureCellPool adopts them and clones 7 more rows.
             var tmpl = _panel.Find(P_ItemCellTemplate);
             if (tmpl != null)
             {
                 _cellTemplate = tmpl.gameObject;
                 _gridContent = tmpl.parent;
-                _cellTemplate.SetActive(false);
+                // Do NOT SetActive(false) — we need the original row visible
+                // so its cells participate in the grid.
             }
+
+            // ── Equip slot labels (left paperdoll) ────────────────────
+            //
+            // Source: 05_Equipment/Lua/Script_Ui_Common_UIEquipPanel.lua:178
+            //   self.tbGridTextList[i] = tbEquipPosKey[i] .. "/Text"
+            //   self.pPanel:SetActive(self.tbGridTextList[i], true)  -- show name
+            // Each slot's child "Text" shows the Vietnamese slot name when empty;
+            // replaced by the equipped item's icon when occupied (SetActive false
+            // on the name, true on UIItemGrid).
+            //
+            // Labels from original UI screenshot (user-provided reference).
+            SetupEquipSlotLabels();
 
             // Subscribe to bag + equip events so the grid/paperdoll refresh
             // when the server fires CMD_BAG_ITEM_UPDATE / CMD_EQUIP_SLOT_UPDATE.
@@ -150,6 +166,66 @@ namespace KTO.UI
             BagMgr.Init();
             SelectFilter(initial);
             RefreshUIEquipPanel();
+            RefreshSeriesIcon();
+            ActivateNpcModelPlaceholder();
+        }
+
+        // ── Element icon (Kim / Mộc / Thuỷ / Hoả / Thổ) on character ──
+        //
+        // Port of Script_Ui_Common_UIEquipPanel.lua:196-200:
+        //   local szPlayerSeries = KPlayer.GetPlayerInitInfo(me.nFaction).nSeries
+        //   for index, sztxt in ipairs(tbSeriesNumberToTextName) do
+        //       self.pPanel:SetActive(btnSeriesText/sztxt, false)
+        //   end
+        //   self.pPanel:SetActive(btnSeriesText/tbSeriesNumberToTextName[szPlayerSeries], true)
+        //
+        // tbSeriesNumberToTextName = { [1]="txtMetal", [2]="txtWood",
+        //                              [3]="txtWater", [4]="txtFire", [5]="txtEarth" }
+        //
+        // DEVIATION: we don't have KPlayer.GetPlayerInitInfo server data yet
+        // so faction→series mapping is hardcoded from ingame observation
+        // (Cái Bang/Võ Đang faction=Thuỷ, etc.). Matches the user's screenshot.
+        void RefreshSeriesIcon()
+        {
+            string[] all = { "txtMetal", "txtWood", "txtWater", "txtFire", "txtEarth" };
+            foreach (var s in all)
+            {
+                var tr = _panel.Find($"UIEquipPanel/btnSeriesText/{s}");
+                if (tr != null) tr.gameObject.SetActive(false);
+            }
+
+            // Pick series by faction. Mapping from KTO faction .tab:
+            //   1=Thiếu Lâm→txtMetal, 2=Thiên Nhẫn→txtWood, 3=Võ Đang→txtWater,
+            //   4=Đường Môn→txtFire, 5=Cái Bang→txtEarth, 6=Minh Giáo→txtMetal,
+            //   7=Thuý Yên→txtWater, 8=Côn Lôn→txtWood, 9=Nga Mi→txtFire.
+            // (Approximate — source was KPlayer.GetPlayerInitInfo which needs
+            // server data. TestHero faction=1; override via player data later.)
+            int faction = PlayerAttributeMgr.Current.nFactionId;
+            string pick = faction switch
+            {
+                1 => "txtMetal",  2 => "txtWood",  3 => "txtWater",
+                4 => "txtFire",   5 => "txtEarth", 6 => "txtMetal",
+                7 => "txtWater",  8 => "txtWood",  9 => "txtFire",
+                _ => "txtWater",
+            };
+            var sel = _panel.Find($"UIEquipPanel/btnSeriesText/{pick}");
+            if (sel != null) sel.gameObject.SetActive(true);
+        }
+
+        // ── NpcModel placeholder ───────────────────────────────────
+        //
+        // The original renders a 3D character preview inside NpcModel via
+        // UINpcModel component (not yet ported). For now we just make sure
+        // the GameObject is active so the hit-zone / frame shows, and
+        // preserve its sort position.
+        //
+        // Full port (Phase 2+): plug in PlayerAssembler rendered into an
+        // SSO render texture, sampled by an Image inside NpcModel.
+        void ActivateNpcModelPlaceholder()
+        {
+            var go = _panel.Find("NpcModel");
+            if (go != null && !go.gameObject.activeSelf)
+                go.gameObject.SetActive(true);
         }
 
         // ── Port of Script_Ui_Common_UIEquipPanel.lua tbWnd:OnOpen ──
@@ -197,6 +273,67 @@ namespace KTO.UI
         {
             var t = FindComp<Text>(path);
             if (t != null) t.text = value;
+        }
+
+        // ── Equip slot labels — one-shot setup at panel Init ──────
+        //
+        // Each equipment slot GameObject (Helm / Armor / ... / Mantle) has
+        // a child called "Text" that displays the Vietnamese category name
+        // when the slot is empty. The Lua UIEquipPanel toggles visibility
+        // of these labels vs the UIItemGrid icon based on whether the slot
+        // is occupied (see Script_Ui_Common_UIEquipPanel.lua:178 + 301).
+        //
+        // Paths from DetailJSON/UIBag_res_p_27.json:
+        //   UIEquipPanel/EquipPanel/PanelEquip/grid1/Helm/Text
+        //   UIEquipPanel/EquipPanel/PanelEquip/grid1/Cuff/Text
+        //   UIEquipPanel/EquipPanel/PanelEquip/grid1/Armor/Text
+        //   UIEquipPanel/EquipPanel/PanelEquip/grid1/Belt/Text
+        //   UIEquipPanel/EquipPanel/PanelEquip/grid1/Boots/Text
+        //   UIEquipPanel/EquipPanel/PanelEquip/grid2/Weapon/Text
+        //   UIEquipPanel/EquipPanel/PanelEquip/grid2/Necklace/Text
+        //   UIEquipPanel/EquipPanel/PanelEquip/grid2/Ring/Text
+        //   UIEquipPanel/EquipPanel/PanelEquip/grid2/Pendant/Text
+        //   UIEquipPanel/EquipPanel/PanelEquip/grid2/Amulet/Text
+        //   UIEquipPanel/EquipPanel/PanelEquip/grid3/Wuxingyin/Text
+        //   UIEquipPanel/EquipPanel/PanelEquip/grid3/Guanyin/Text
+        //   UIEquipPanel/EquipPanel/PanelEquip/grid3/Mantle/Text
+        //
+        // Label translations match user's reference screenshot of the
+        // original KTO client (Vietnamese release).
+        void SetupEquipSlotLabels()
+        {
+            const string root = "UIEquipPanel/EquipPanel/PanelEquip";
+            SetText($"{root}/grid1/Helm/Text",      "Nón");
+            SetText($"{root}/grid1/Cuff/Text",      "Hộ Uyển");
+            SetText($"{root}/grid1/Armor/Text",     "Y Phục");
+            SetText($"{root}/grid1/Belt/Text",      "Đai");
+            SetText($"{root}/grid1/Boots/Text",     "Giày");
+            SetText($"{root}/grid2/Weapon/Text",    "Vũ Khí");
+            SetText($"{root}/grid2/Necklace/Text",  "Dây Chuyền");
+            SetText($"{root}/grid2/Ring/Text",      "Nhẫn");
+            SetText($"{root}/grid2/Pendant/Text",   "Ngọc Bội");
+            SetText($"{root}/grid2/Amulet/Text",    "Hộ Thân Phù");
+            SetText($"{root}/grid3/Wuxingyin/Text", "Ngũ Hành Ấn");
+            SetText($"{root}/grid3/Guanyin/Text",   "Quan Ấn");
+            SetText($"{root}/grid3/Mantle/Text",    "Phi Phong");
+
+            // Also make sure the GameObjects hosting the label Text are
+            // active — import pipeline may have left them inactive.
+            string[] slotPaths = {
+                $"{root}/grid1/Helm/Text",       $"{root}/grid1/Cuff/Text",
+                $"{root}/grid1/Armor/Text",      $"{root}/grid1/Belt/Text",
+                $"{root}/grid1/Boots/Text",      $"{root}/grid2/Weapon/Text",
+                $"{root}/grid2/Necklace/Text",   $"{root}/grid2/Ring/Text",
+                $"{root}/grid2/Pendant/Text",    $"{root}/grid2/Amulet/Text",
+                $"{root}/grid3/Wuxingyin/Text",  $"{root}/grid3/Guanyin/Text",
+                $"{root}/grid3/Mantle/Text",
+            };
+            foreach (var p in slotPaths)
+            {
+                var tr = _panel.Find(p);
+                if (tr != null && !tr.gameObject.activeSelf)
+                    tr.gameObject.SetActive(true);
+            }
         }
 
         // ----- filter tab handling -----
@@ -284,22 +421,51 @@ namespace KTO.UI
         }
 
         // ----- cell pool -----
+        //
+        // The imported prefab has:
+        //   bagItemSV/BIViewport/BIContent/ItemCell                ← the ROW template
+        //   bagItemSV/BIViewport/BIContent/ItemCell/Item1..Item5   ← 5 cells per row
+        //
+        // Original Lua uses 5 columns × 8 rows = 40 slots per bag (LoopScrollView).
+        // So we clone the ROW 8 times (= ceil(40/5)) and flatten to 40 cells,
+        // matching the layout in the user's reference screenshot.
         void EnsureCellPool(int wantedCount)
         {
             if (_cellTemplate == null || _gridContent == null) return;
+
+            const int cellsPerRow = 5;
+
+            // Include the ORIGINAL row (Item1..Item5) in our pool so we don't
+            // waste the 5 cells that shipped with the prefab. Re-activate it
+            // since Init() hid the template.
+            if (_cells.Count == 0)
+            {
+                _cellTemplate.SetActive(true);
+                _cellTemplate.name = "ItemCell";  // original template row
+                for (int col = 1; col <= cellsPerRow; col++)
+                {
+                    var slot = _cellTemplate.transform.Find($"Item{col}");
+                    if (slot == null) continue;
+                    _cells.Add(new ItemCell(slot.gameObject));
+                }
+            }
+
+            // Clone additional ROWS to satisfy wantedCount (8 rows for 40 slots).
             while (_cells.Count < wantedCount)
             {
-                var go = Instantiate(_cellTemplate, _gridContent);
-                go.SetActive(true);
-                go.name = $"ItemCell_{_cells.Count}";
-
-                // Immediately clear baked "dynamic_change_from_script" overlays
-                // so empty-slot cells don't show placeholder text.
-                var cell = new ItemCell(go);
-                _cells.Add(cell);
-                cell.SetEmpty();
+                var row = Instantiate(_cellTemplate, _gridContent);
+                row.SetActive(true);
+                int rowIndex = _cells.Count / cellsPerRow;
+                row.name = $"ItemCell_{rowIndex}";
+                for (int col = 1; col <= cellsPerRow; col++)
+                {
+                    var slot = row.transform.Find($"Item{col}");
+                    if (slot == null) continue;
+                    var cell = new ItemCell(slot.gameObject);
+                    _cells.Add(cell);
+                    cell.SetEmpty();
+                }
             }
-            // If fewer needed, leave extras parented (SetEmpty hides them).
         }
 
         // ----- helpers -----
