@@ -617,24 +617,42 @@ namespace KTO.UI
             }
         }
 
-        // Null out the sprites the import pipeline wrongly assigned to
-        // a cell's backdrop layers (bg, Base, ItemLayer). The original
-        // DetailJSON has these as sprite=null/color=white — the game's
-        // Lua then assigns real sprites only when an item is equipped.
-        // Our importer fell back to HUD placeholder sprites (itemframebg,
-        // itembaseOrange, chunyangwuji) which made every cell look like
-        // a dark brown box.
+        // Strip the wrong sprites the import pipeline assigned to the
+        // cell backdrop layers, AND hide every layer that's meant to be
+        // item-state-specific (CDLayer, imgPlus, TagCanDeal, etc.) so
+        // empty cells match the original's clean cream/transparent look
+        // (user reference screenshot). Without this, empty cells render
+        // dark gray because of assigned HUD textures + tag overlays.
+        //
+        // Original DetailJSON/UIBag_res_p_27.json has bg/Base/ItemLayer
+        // with sprite=null. Our importer fell back to HUD sprites
+        // (itemframebg/itembaseOrange/chunyangwuji → dark). Tags like
+        // CDLayer/TagMarketStall only activate at runtime when the
+        // item's state warrants them.
         static void StripCellBackdrop(Transform cellRoot)
         {
-            string[] layers = { "UIItemGrid/bg", "UIItemGrid/Base", "UIItemGrid/ItemLayer" };
-            foreach (var p in layers)
+            // Only the 3 backdrop layers that the import pipeline wrongly
+            // assigned HUD textures to (itemframebg, itembaseOrange,
+            // chunyangwuji). Clearing these restores the cell to its
+            // DetailJSON original state (sprite=null, invisible). The
+            // state-tag overlays (CDLayer, TagMarketStall, etc.) default
+            // to inactive in Unity UGUI — leaving them alone keeps the
+            // prefab's layout intact.
+            string[] stripLayers = {
+                "UIItemGrid/bg",
+                "UIItemGrid/Base",
+                "UIItemGrid/ItemLayer",
+            };
+            foreach (var p in stripLayers)
             {
                 var tr = cellRoot.Find(p);
                 if (tr == null) continue;
                 var img = tr.GetComponent<Image>();
-                if (img == null) continue;
-                img.sprite = null;
-                img.color  = new Color(1f, 1f, 1f, 0f);  // fully transparent
+                if (img != null)
+                {
+                    img.sprite = null;
+                    img.color  = new Color(1f, 1f, 1f, 0f);
+                }
             }
         }
 
